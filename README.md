@@ -138,6 +138,8 @@ Trong VS Code, mở notebook bằng **Jupyter Notebook**, chọn **Select Kernel
 
 **Đã có dữ liệu và split:** có thể chạy thẳng notebook 03. Không cần tải hoặc chia lại dữ liệu trước mỗi lần làm bài.
 
+Notebook 02 khi đã có đủ bốn file split sẽ tự động audit và giữ nguyên cách chia, lưu `results/tables/step2_fixed_split_audit.json`. Các ứng viên chưa rà vẫn được ghi pending và kết quả audit là provisional; không tự gán quyết định. Khi chưa có split, quy trình tạo split mới vẫn yêu cầu rà trước khi chốt.
+
 Sau notebook 03, mở **04_train_unet.ipynb**: **Restart Kernel → Run All** sẽ chạy M1 trên toàn bộ split cố định, mặc định 700 train / 150 validation, tối đa 200 epoch và early stopping patience 20. Notebook chỉ có luồng train đầy đủ, giữ log từng epoch và tắt thanh tiến trình từng batch. Muốn xem lại biểu đồ từ kết quả đã lưu, chỉ chạy ô cuối, không Run All. Brightness/contrast chưa được thêm; train dùng lật/xoay từ bước 3. Chế độ học khớp vài ảnh vẫn có ở CLI để kiểm tra khi cần.
 
 Số notebook là thứ tự chạy. Bước 1 trong pipeline.md là chốt phạm vi/phân công; notebook 01–02 phục vụ chuẩn bị dữ liệu của bước 2, notebook 03 phục vụ bước 3.
