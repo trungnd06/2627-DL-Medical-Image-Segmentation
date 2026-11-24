@@ -61,10 +61,10 @@ def write_reports(project_root, rows_by_dataset, resolution_rows, review_rows, p
                "## Nguồn và phiên bản", ""]
     report += [f"- {dataset}: {details}" for dataset, details in source_metadata.items()]
     report += ["", "## Rà ảnh và giới hạn", "",
-               "Sàng lọc SHA-256 byte, RGB64 và dHash/pHash. Cùng RGB64 chỉ chứng minh cùng biểu diễn thu nhỏ.",
+               "Sàng lọc SHA-256 byte, RGB64 và dHash/pHash. Ảnh tính hash giữ tỷ lệ bằng Lanczos, padding đen ở giữa; RGB 64×64, dHash 9×8, pHash 32×32. Cùng RGB64 chỉ chứng minh cùng biểu diễn thu nhỏ; padding cũng ảnh hưởng hash.",
                f"Kvasir: {sum(r['scope'] == 'Kvasir-SEG' and r['screening_reason'] == 'hash_threshold' for r in review_rows)} cặp qua ngưỡng; {sum(r['scope'] == 'Kvasir-SEG' and r['screening_reason'] == 'historical_manual_review' for r in review_rows)} cặp lịch sử ngoài ngưỡng được giữ để rà.",
                "Khoảng cách hash có thể thay đổi theo phiên bản Pillow/Python. Giữ các cặp lịch sử và quyết định đã lưu; manifest ghi phiên bản chạy thực tế.",
-               "Hai ứng viên lịch sử được Codex xem trực quan và ghi unsure. Giữ nguyên năm unsure cũ. Giữ chung nhóm confirmed và unsure khi chia, không đổi unsure thành confirmed.", ""]
+               "Giữ quyết định lịch sử đã lưu; ứng viên mới phải được rà, không tự gán confirmed. Giữ chung nhóm confirmed và unsure khi chia, không đổi unsure thành confirmed.", ""]
     report += [f"- {scope}: {counts}" for scope, counts in review_summary.items()]
     report += ["", "Chưa rà hết các cặp trong riêng ClinicDB; toàn bộ bộ này thuộc external. Không chứng minh độc lập theo bệnh nhân hoặc chuỗi nội soi.",
                "Không dùng ClinicDB để chọn loss, checkpoint, threshold hoặc siêu tham số. Chưa có kết quả train.", "",

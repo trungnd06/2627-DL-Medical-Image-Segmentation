@@ -9,6 +9,25 @@ DATASET_SPECS = {"Kvasir-SEG": (".jpg", 1000), "CVC-ClinicDB": (".png", 612)}
 MASK_THRESHOLD = 127
 
 
+def letterbox_geometry(source_size, target_size):
+    """Centered padding for HW sizes; odd excess goes right/bottom.
+
+    Kept independent of torch so downloading/hash screening only needs Pillow.
+    Returned padding order is (left, top, right, bottom).
+    """
+    source_h, source_w = source_size
+    target_h, target_w = target_size
+    if min(source_h, source_w, target_h, target_w) <= 0:
+        raise ValueError("Source and target sizes must be positive")
+    scale = min(target_h / source_h, target_w / source_w)
+    height = max(1, min(target_h, round(source_h * scale)))
+    width = max(1, min(target_w, round(source_w * scale)))
+    left, top = (target_w - width) // 2, (target_h - height) // 2
+    return {"source_size": (source_h, source_w), "input_size": (target_h, target_w),
+            "resized_size": (height, width),
+            "padding": (left, top, target_w - width - left, target_h - height - top)}
+
+
 def find_project_root(start=None):
     start = Path(start or Path.cwd()).expanduser().resolve()
     for folder in (start, *start.parents):

@@ -4,6 +4,7 @@ import random
 
 import torch
 from PIL import Image
+from .common import letterbox_geometry
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -20,24 +21,6 @@ def binarize_mask(mask, threshold=127):
     if not 0 <= threshold <= 255:
         raise ValueError("Mask threshold must be between 0 and 255")
     return mask.convert("L").point(lambda value: 255 if value > threshold else 0)
-
-
-def letterbox_geometry(source_size, target_size):
-    """Compute centered padding. Sizes are HW; padding is left/top/right/bottom.
-
-    Integer rounding may leave one extra pixel on the right or bottom.
-    """
-    source_h, source_w = source_size
-    target_h, target_w = target_size
-    if min(source_h, source_w, target_h, target_w) <= 0:
-        raise ValueError("Source and target sizes must be positive")
-    scale = min(target_h / source_h, target_w / source_w)
-    height = max(1, min(target_h, round(source_h * scale)))
-    width = max(1, min(target_w, round(source_w * scale)))
-    left, top = (target_w - width) // 2, (target_h - height) // 2
-    return {"source_size": (source_h, source_w), "input_size": (target_h, target_w),
-            "resized_size": (height, width),
-            "padding": (left, top, target_w - width - left, target_h - height - top)}
 
 
 class SegmentationTransform:

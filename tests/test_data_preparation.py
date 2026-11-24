@@ -12,8 +12,11 @@ from pathlib import Path
 
 from PIL import Image
 
-from src.datasets.common import DATASET_SPECS
-from src.datasets.duplicates import connected_components, load_review
+from src.datasets.common import DATASET_SPECS, save_csv
+from src.datasets.duplicates import (
+    HASH_PREPROCESSING, connected_components, fingerprint_image, hash_thumbnail,
+    load_review, screen_duplicates,
+)
 from src.datasets.splitting import build_split_plan, validate_split_plan, write_split_artifacts
 from src.datasets.statistics import scan_dataset
 
@@ -47,6 +50,61 @@ def split_fixture():
 
 
 class PreparationTests(unittest.TestCase):
+    def test_hash_thumbnail_preserves_aspect_and_centers_content(self):
+        for source_size, target, box in (
+            ((80, 40), (64, 64), (0, 16, 64, 48)),
+            ((40, 80), (64, 64), (16, 0, 48, 64)),
+            ((90, 30), (9, 8), (0, 2, 9, 5)),
+            ((32, 32), (32, 32), (0, 0, 32, 32)),
+        ):
+            with self.subTest(source=source_size, target=target):
+                source = Image.new('L', source_size, 255)
+                before = source.tobytes()
+                thumbnail = hash_thumbnail(source, target)
+                self.assertEqual(thumbnail.size, target)
+                self.assertEqual(thumbnail.getbbox(), box)
+                self.assertEqual(source.tobytes(), before)
+                self.assertEqual(source.size, source_size)
+
+    def test_fingerprint_keeps_raw_bytes_and_uses_padded_rgb(self):
+        with temporary_workspace() as folder:
+            path = folder / 'sample.png'
+            Image.new('RGB', (80, 40), 'white').save(path)
+            before = path.read_bytes()
+            fingerprint = fingerprint_image(path)
+            self.assertEqual(fingerprint['file_sha256'], hashlib.sha256(before).hexdigest())
+            with Image.open(path) as source:
+                expected = hashlib.sha256(hash_thumbnail(source, (64, 64)).tobytes()).hexdigest()
+            self.assertEqual(fingerprint['rgb64_sha256'], expected)
+            self.assertEqual(fingerprint['hash_preprocessing'], HASH_PREPROCESSING)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_hash_change_retains_review_and_leaves_new_pairs_pending(self):
+        ids = ['Kvasir-SEG/a.jpg', 'Kvasir-SEG/b.jpg', 'Kvasir-SEG/c.jpg']
+        pair_id = 'p-' + hashlib.sha256('\n'.join(ids[:2]).encode()).hexdigest()[:12]
+        fingerprints = {
+            key: {'file_sha256': str(i), 'rgb64_sha256': str(i),
+                  'dhash': 0 if i != 1 else (1 << 64) - 1,
+                  'phash': 0 if i != 1 else (1 << 63) - 1}
+            for i, key in enumerate(ids)
+        }
+        with temporary_workspace() as folder:
+            columns = ['pair_id', 'image_a', 'image_b', 'decision', 'note']
+            save_csv(folder / 'splits/duplicate_review.csv', columns, [
+                dict(zip(columns, [pair_id, ids[0], ids[1], 'unsure', 'keep together'])),
+                dict(zip(columns, ['old-pending', ids[1], ids[2], 'pending', ''])),
+            ])
+            _, candidates = screen_duplicates(folder, fingerprints)
+            reviews = load_review(folder, candidates)
+            historical = next(row for row in reviews if row['pair_id'] == pair_id)
+            self.assertEqual(historical['decision'], 'unsure')
+            self.assertEqual(historical['screening_reason'], 'historical_manual_review')
+            fresh = [row for row in reviews if row['pair_id'] != pair_id]
+            self.assertEqual(len(fresh), 1)
+            self.assertEqual(fresh[0]['decision'], 'pending')
+            self.assertEqual({fresh[0]['image_a'], fresh[0]['image_b']}, {ids[0], ids[2]})
+            self.assertTrue((folder / 'logs/duplicate_check/screening_manifest.json').exists())
+
     def test_uncertain_and_cross_dataset_links(self):
         fingerprints, reviews = split_fixture()
         plan = build_split_plan(fingerprints, [], reviews)

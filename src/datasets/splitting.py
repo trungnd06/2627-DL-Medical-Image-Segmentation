@@ -6,7 +6,7 @@ from hashlib import sha256
 from itertools import combinations
 from pathlib import Path
 from .common import DATASET_SPECS, MASK_THRESHOLD, save_csv
-from .duplicates import connected_components, CANDIDATE_COLUMNS
+from .duplicates import connected_components, CANDIDATE_COLUMNS, HASH_PREPROCESSING
 
 def allocate_groups(groups, seed):
     total = sum(map(len, groups))
@@ -154,7 +154,7 @@ def write_split_artifacts(project_root, rows_by_dataset, fingerprints, review_ro
         'ratios': [0.7, 0.15, 0.15],
         'algorithm': 'sorted_components_seeded_shuffle_size_desc_largest_remaining_capacity_v1',
         'mask_threshold': MASK_THRESHOLD,
-        'screening': {'dhash_max': DHASH_MAX, 'phash_max': PHASH_MAX, 'rule': 'dhash OR phash plus explicit historical manual candidates'},
+        'screening': {'hash_preprocessing': HASH_PREPROCESSING, 'dhash_max': DHASH_MAX, 'phash_max': PHASH_MAX, 'rule': 'dhash OR phash plus preserved reviewed pairs'},
         'grouping': 'exact_hash + confirmed + unsure; transitive components',
         'cross_dataset_policy': 'keep ClinicDB external; exclude related Kvasir IDs',
         'counts': {key: len(ids) for key, ids in split_ids.items()},

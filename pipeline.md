@@ -59,6 +59,7 @@ Thực hiện:
 - Kiểm tra khả năng đọc file, kích thước khớp nhau và hiển thị ảnh, mask, overlay.
 - Thống kê độ phân giải, tỷ lệ diện tích polyp và số mask rỗng.
 - Tìm ảnh trùng/gần trùng trong Kvasir trước khi chia; kiểm tra thêm giữa Kvasir và ClinicDB. Ghi phương pháp, ngưỡng phát hiện và kết quả kiểm tra thủ công.
+- Tính hash trên ảnh thu nhỏ giữ tỷ lệ bằng Lanczos và padding đen ở giữa: RGB 64×64, dHash 9×8, pHash 32×32. Chia đều padding; phần dư 1 pixel ở phải/dưới. Viền đen ảnh hưởng hash nên vẫn rà ảnh gốc. Lưu phiên bản phương pháp/Pillow; khi đổi hash, giữ quyết định đã rà, đánh dấu cặp mới pending và không tự ghi đè split đã chốt.
 - Nếu có ảnh liên quan, đưa chúng vào cùng nhóm khi chia. Nếu có trùng giữa train và ClinicDB, xử lý theo quy tắc xác định trước khi train và ghi lại danh sách, số lượng đánh giá thực tế.
 
 **Split dự kiến:** Kvasir train/val/test = **70/15/15**, tương ứng **700/150/150** nếu không cần điều chỉnh theo nhóm. Seed chia tập là **42**. Nếu nhóm ảnh liên quan khiến không đạt đúng số lượng, ưu tiên không tách nhóm và công bố số lượng cuối.
