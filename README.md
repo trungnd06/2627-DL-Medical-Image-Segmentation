@@ -1,186 +1,192 @@
 # Medical Image Segmentation
 
-Bài tập lớn môn Học sâu: phân đoạn polyp trong ảnh nội soi. Đầu vào là ảnh RGB; đầu ra là mask cùng kích thước ảnh, với `1 = polyp`, `0 = nền`.
+Đề tài 2 môn Học sâu: phân đoạn polyp trong ảnh nội soi. Đầu vào là ảnh RGB; đầu ra là mask cùng kích thước ảnh gốc, với `1 = polyp`, `0 = nền`. Chỉ số đánh giá chính: **Dice và IoU**.
 
-Hướng thực nghiệm dự kiến: tự cài U-Net, so sánh với U-Net có encoder pretrained và SegFormer; khảo sát Dice/Focal/Tversky loss, khả năng tổng quát hóa sang nguồn ảnh khác và SAM zero-shot. Chỉ số bắt buộc là **Dice và IoU**.
+Nhóm dự kiến so sánh U-Net tự cài, U-Net có pretrained encoder và SegFormer, đồng thời khảo sát loss và SAM zero-shot. Kế hoạch chi tiết nằm trong [pipeline.md](pipeline.md).
 
-**Trạng thái hiện tại:** repo đang ở bước chuẩn bị dữ liệu. Notebook tải dữ liệu đã được triển khai; các file mô hình, train/evaluate, cấu hình huấn luyện và danh sách split hiện là khung chờ hoàn thiện. Chưa có kết quả huấn luyện để báo cáo.
+**Tổ chức code:** module Python chứa logic; notebook gọi module, giải thích bằng Markdown và hiển thị hình. Script là cách chạy thay thế từ terminal.
 
-## 1. Chạy nhanh sau khi clone repo
+**Trạng thái:** đã có chuẩn bị dữ liệu, split cố định, Dataset, transforms, DataLoader và metric. Mô hình, loss và vòng train/evaluate chưa triển khai. Các mục `[khung]` bên dưới chưa có chức năng chạy.
 
-Yêu cầu: **Python 3.10 trở lên**, Internet, khoảng **1 GB dung lượng trống** để chứa dữ liệu, ZIP và snapshot cache. Bước tải dữ liệu không cần GPU, tài khoản Hugging Face hoặc API key; repo dữ liệu Hugging Face đang công khai.
+## 1. Cấu trúc dự án
 
-Mở terminal tại thư mục repo vừa clone. Trên Windows PowerShell:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m jupyterlab
-```
-
-Trên Linux/macOS:
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m jupyterlab
-```
-
-Trong JupyterLab, mở **[src/datasets/downdata.ipynb](src/datasets/downdata.ipynb)**, chọn kernel của môi trường vừa cài và **Run → Run All Cells**. Nếu dùng VS Code, mở repo, chọn đúng Python interpreter/kernel rồi chạy **Run All** trong notebook.
-
-Notebook sẽ:
-
-1. Tìm thư mục gốc repo từ thư mục hiện tại hoặc các thư mục cha.
-2. Tạo các thư mục cục bộ `data/`, `checkpoints/` và `logs/` nếu chưa có.
-3. Tải ZIP **Kvasir-SEG từ Simula** và snapshot **CVC-ClinicDB từ `berkaytrhn/cvc-clinicdb` trên Hugging Face**. Khóa checksum ZIP và revision snapshot; cache nằm trong `data/_downloads/`.
-4. Lấy đúng các cặp ảnh–mask vào cấu trúc chuẩn, giữ nguyên nội dung JPG/PNG, không resize hoặc sửa nhãn.
-5. Kiểm tra số lượng, tên file, khả năng đọc ảnh, kích thước ảnh–mask và mask có vùng polyp sau khi áp dụng ngưỡng 127.
-6. Lưu nguồn tải và checksum từng file vào `data/dataset_manifest.json`, hiển thị bảng số lượng và ảnh mẫu.
-
-Chạy lại notebook sẽ kiểm tra và tái sử dụng dữ liệu khớp nguồn; nếu thiếu file thì bổ sung. CVC-ClinicDB được đối chiếu với SHA-256 từng PNG trong metadata LFS của revision đã khóa. Nếu phát hiện file đã tồn tại nhưng khác nguồn hoặc có file ảnh ngoài danh sách dự kiến, notebook dừng và chỉ rõ xung đột để bạn kiểm tra, **không tự ghi đè hoặc xóa dữ liệu đó**. Cần Internet để truy vấn metadata Hugging Face khi chạy lại; file ảnh đã đủ và đúng checksum sẽ không tải lại.
-
-Có thể chạy toàn bộ notebook từ terminal mà không lưu output vào notebook trong repo:
-
-```powershell
-.\.venv\Scripts\python.exe -m jupyter nbconvert --to notebook --execute src/datasets/downdata.ipynb --ExecutePreprocessor.timeout=1800 --output downdata.executed.ipynb --output-dir logs
-```
-
-Lệnh trên dùng trong PowerShell tại thư mục gốc repo. Nếu chạy notebook từ bên ngoài cây thư mục repo, điền đường dẫn repo vào biến `PROJECT_ROOT_OVERRIDE` ở cell cấu hình.
-
-Nếu gặp lỗi:
-
-- `ModuleNotFoundError`: kiểm tra kernel có dùng đúng môi trường đã cài `requirements.txt` không.
-- Lỗi kết nối: chạy lại; Kvasir loại bỏ file ZIP tải dở, Hugging Face quản lý cache của snapshot. File đã đủ và kiểm tra thành công được dùng lại.
-- Lỗi checksum hoặc file xung đột: kiểm tra đường dẫn được báo; nếu file tải bị hỏng, di chuyển riêng file đó ra ngoài rồi chạy lại. Không xóa toàn bộ `data/` hoặc tắt kiểm tra checksum.
-- Lỗi chứng chỉ HTTPS: cập nhật Python/chứng chỉ của môi trường hoặc cấu hình chứng chỉ tin cậy của mạng đang dùng. Notebook dùng xác minh HTTPS mặc định, không tắt TLS verification.
-
-## 2. Hai bộ dữ liệu sử dụng
-
-| Dataset | Số cặp ảnh–mask | Định dạng trong repo | Vai trò dự kiến |
-| --- | ---: | --- | --- |
-| **Kvasir-SEG** | 1.000 | `images/*.jpg`, `masks/*.jpg`; độ phân giải thay đổi | Train, validation và test nội bộ |
-| **CVC-ClinicDB** | 612 | `images/1.png` … `612.png`, `masks/1.png` … `612.png`; `384 × 288` | Đánh giá bên ngoài, không dùng tinh chỉnh mô hình |
-
-### Kvasir-SEG
-
-- Thông tin và điều kiện sử dụng: <https://datasets.simula.no/kvasir-seg/>.
-- ZIP chính thức: <https://datasets.simula.no/downloads/kvasir-seg.zip>.
-- Notebook chỉ lấy hai thư mục ảnh và mask phục vụ phân đoạn; không cần bounding box JSON.
-
-### CVC-ClinicDB
-
-- Thông tin, bản quyền và trích dẫn gốc: <https://polyp.grand-challenge.org/CVCClinicDB/>.
-- Nguồn tải tự động: **đúng repo Hugging Face mà nhóm đã sử dụng**, <https://huggingface.co/datasets/berkaytrhn/cvc-clinicdb>.
-- Notebook dùng `huggingface_hub.snapshot_download` với `repo_id="berkaytrhn/cvc-clinicdb"`, `repo_type="dataset"` và **revision cố định `07f1aae53befabc313f9435c8b1b9565642a36c8`**. Đây là snapshot đã đối chiếu với dữ liệu hiện tại của nhóm.
-- Lấy đầy đủ **612 cặp PNG** trong `CVC-ClinicDB/Original/` và `CVC-ClinicDB/Ground Truth/`; kiểm tra SHA-256 của cả 1.224 file theo metadata LFS ở revision đó. Không tự chuyển sang mirror khác khi tải lỗi.
-- Đã đối chiếu cả **1.224 file ảnh/mask hiện tại của nhóm** với SHA-256 của revision này: tất cả đều khớp. Việc chuẩn hóa thư mục không thay đổi dữ liệu.
-- Cache snapshot tại `data/_downloads/clinicdb-hf/` (đường dẫn ngắn để thuận tiện trên Windows); revision vẫn được khóa trong lệnh tải và ghi vào manifest. Khi tải dữ liệu mới, notebook cũng giữ `README.md`, `metadata.csv` và `class_dict.csv` từ nguồn trong cache; tên ảnh được giữ nguyên.
-
-Lệnh bạn đã dùng để tải CVC-ClinicDB:
-
-```bash
-python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='berkaytrhn/cvc-clinicdb', repo_type='dataset', local_dir='data/CVC-ClinicDB')"
-```
-
-Lệnh này tải repo và giữ cấu trúc nguồn, nên ảnh nằm tại `data/CVC-ClinicDB/CVC-ClinicDB/Original/` và mask tại `data/CVC-ClinicDB/CVC-ClinicDB/Ground Truth/`; nó **không tự tạo `images/` và `masks/`**. Nó cũng mặc định lấy nhánh `main`, có thể thay đổi về sau. Các thành viên nên chạy notebook để dùng cùng revision và nhận sẵn cấu trúc chuẩn:
-
-| Đường dẫn trong snapshot Hugging Face | Đường dẫn dùng trong dự án |
-| --- | --- |
-| `CVC-ClinicDB/Original/<tên>.png` | `data/CVC-ClinicDB/images/<tên>.png` |
-| `CVC-ClinicDB/Ground Truth/<tên>.png` | `data/CVC-ClinicDB/masks/<tên>.png` |
-
-Notebook sao chép **nguyên byte**, chỉ đổi cách sắp xếp thư mục. Nếu trước đó đã tải bằng lệnh trên, notebook vẫn chuẩn bị thư mục chuẩn mà không xóa cây snapshot cũ.
-
-Checksum ZIP Kvasir-SEG và revision CVC-ClinicDB được ghi trực tiếp trong cell cấu hình của notebook. Không tùy tiện bỏ kiểm tra checksum hoặc thay revision; cần xác minh lại dữ liệu trước khi đổi nguồn/phiên bản.
-
-Hai bộ đều dành cho nghiên cứu và giáo dục; điều kiện của tác giả gốc vẫn áp dụng khi tải từ mirror. Hãy trích dẫn các bài báo ở cuối README trong báo cáo.
-
-## 3. Cấu trúc thư mục sau khi chạy notebook
+Cây dưới mô tả mã nguồn và các đầu vào cần chia sẻ trên Git. Riêng `data/` là dữ liệu cục bộ được tạo sau khi tải, không đưa lên Git. Không liệt kê các báo cáo/hình sinh tự động hoặc file làm việc riêng.
 
 ```text
 Medical-Image-Segmentation/
-├── data/                              # Tạo tại máy, Git bỏ qua
-│   ├── Kvasir-SEG/
-│   │   ├── images/                    # 1.000 JPG
-│   │   └── masks/                     # 1.000 JPG, cùng tên với ảnh
-│   ├── CVC-ClinicDB/
-│   │   ├── images/                    # 612 PNG
-│   │   └── masks/                     # 612 PNG, cùng tên với ảnh
-│   ├── _downloads/                    # ZIP Kvasir và cache snapshot Hugging Face
-│   └── dataset_manifest.json          # Nguồn tải, thống kê, checksum file
-├── src/
+├── README.md                         # Cấu trúc, cài đặt và hướng dẫn chạy
+├── pipeline.md                       # Kế hoạch thực hiện và bảng thí nghiệm
+├── requirements.txt                  # Thư viện chuẩn bị dữ liệu, notebook 01–02
+├── requirements-training.txt         # Bao gồm requirements.txt, thêm PyTorch và YAML
+├── .gitignore                        # Quy tắc bỏ qua file cục bộ/sinh tự động
+├── notebooks/                        # Giải thích, gọi module và xem hình minh họa
+│   ├── 01_download_data.ipynb         # Tải/xác minh nguồn và xem mẫu ảnh–mask
+│   ├── 02_prepare_data.ipynb          # Thống kê, rà ảnh gần trùng và chia tập
+│   └── 03_data_pipeline.ipynb         # Kiểm tra batch, transforms và Dice/IoU
+├── src/                              # Module dùng chung
+│   ├── __init__.py                   # Khai báo package src
 │   ├── datasets/
-│   │   ├── downdata.ipynb             # Notebook cần chạy để tái tạo data/
-│   │   ├── dataset.py
-│   │   └── transforms.py
+│   │   ├── __init__.py               # Khai báo package dữ liệu
+│   │   ├── common.py                 # Đường dẫn, hằng số, CSV và checksum
+│   │   ├── download.py               # Tải/đối chiếu dữ liệu từ nguồn cố định
+│   │   ├── statistics.py             # Kiểm tra cặp, thống kê và overlay nhãn
+│   │   ├── duplicates.py             # Hash ảnh, sàng lọc và đọc quyết định rà
+│   │   ├── splitting.py              # Chia theo nhóm/seed, kiểm tra và lưu split
+│   │   ├── reporting.py              # Xuất bảng/hình và tổng kết chuẩn bị dữ liệu
+│   │   ├── preparation.py            # Điều phối bước chuẩn bị và chia tập
+│   │   ├── dataset.py                # Dataset, ghép batch và tạo DataLoader
+│   │   ├── transforms.py             # Resize, augmentation đồng bộ, normalization
+│   │   └── preview.py                # Minh họa ảnh–mask trước/sau transforms
 │   ├── models/
-│   │   ├── unet.py
-│   │   ├── pretrained_unet.py
-│   │   ├── segformer.py
-│   │   └── sam.py
-│   ├── losses.py
-│   ├── metrics.py
-│   ├── engine.py
-│   └── utils.py
-├── scripts/
-│   ├── train.py
-│   ├── evaluate.py
-│   ├── evaluate_sam.py
-│   └── predict.py
-├── configs/                           # Cấu hình thí nghiệm, đưa lên Git
-├── splits/                            # Danh sách chia tập, đưa lên Git
-├── results/
-│   ├── tables/
-│   └── figures/
-├── checkpoints/                       # Trọng số, Git bỏ qua
-├── logs/                              # Log, Git bỏ qua
-├── report/                            # Báo cáo ACL
-├── requirements.txt
-├── README.md
-└── .gitignore
+│   │   ├── unet.py                   # [khung] U-Net tự cài, M1
+│   │   ├── pretrained_unet.py        # [khung] U-Net–ResNet34, M2/A1
+│   │   ├── segformer.py              # [khung] SegFormer-B0, M3
+│   │   └── sam.py                    # [khung] SAM zero-shot, S1/S2
+│   ├── metrics.py                    # Dice/IoU/Precision/Recall theo từng ảnh
+│   ├── utils.py                      # Đặt seed và đọc config YAML
+│   ├── losses.py                     # [khung] BCE+Dice, Focal, Tversky
+│   └── engine.py                     # [khung] Vòng train/validation
+├── scripts/                          # Các lệnh chạy từ terminal
+│   ├── __init__.py                   # Hỗ trợ python -m scripts.<tên>
+│   ├── prepare_data.py               # Chuẩn bị/chia tập; --download để tải trước
+│   ├── preview_data.py               # Kiểm tra đầu vào và xuất hình transforms
+│   ├── train.py                      # [khung] Khởi chạy huấn luyện
+│   ├── evaluate.py                   # [khung] Đánh giá mô hình đã train
+│   ├── evaluate_sam.py               # [khung] Đánh giá SAM có prompt
+│   └── predict.py                    # [khung] Dự đoán mask từ ảnh
+├── configs/                          # Thông số thí nghiệm
+│   ├── unet.yaml                     # Preprocessing/loader và cấu hình M1 dự kiến
+│   ├── pretrained_unet.yaml          # [khung] Cấu hình M2/A1
+│   ├── segformer.yaml                # [khung] Cấu hình M3
+│   └── sam.yaml                      # [khung] Cấu hình SAM/prompt
+├── splits/                           # Đầu vào cố định, dùng chung cho cả nhóm
+│   ├── kvasir_train.txt              # 700 ID train
+│   ├── kvasir_val.txt                # 150 ID validation
+│   ├── kvasir_test.txt               # 150 ID test nội bộ
+│   ├── clinicdb_external.txt         # 612 ID đánh giá ngoài
+│   └── duplicate_review.csv          # Quyết định rà ảnh để tái tạo cách chia
+├── tests/                            # Kiểm thử code, khác tập dữ liệu test
+│   ├── test_data_preparation.py      # Kiểm tra nguồn, chia tập và chống ghi đè
+│   └── test_training_data.py         # Kiểm tra transforms, loader và metric
+├── report/                           # Báo cáo ACL tiếng Việt
+│   ├── main.tex                      # [khung] Nội dung báo cáo
+│   └── references.bib                # [khung] Trích dẫn BibTeX
+└── data/                             # Tạo tại máy sau khi tải; không đưa lên Git
+    ├── Kvasir-SEG/
+    │   ├── images/                   # 1.000 ảnh JPG
+    │   └── masks/                    # 1.000 mask JPG, cùng tên với ảnh
+    ├── CVC-ClinicDB/
+    │   ├── images/                   # 612 ảnh PNG
+    │   └── masks/                    # 612 mask PNG, cùng tên với ảnh
+    ├── _downloads/                   # ZIP/snapshot cache để tái sử dụng
+    └── dataset_manifest.json         # Nguồn, phiên bản và checksum ảnh/mask
 ```
 
-Git không lưu thư mục rỗng. Vì thế một số thư mục như `results/tables/` và `results/figures/` có thể chưa xuất hiện sau khi clone; tạo khi bắt đầu xuất kết quả. `checkpoints/` và `logs/` được notebook tạo lại; `.venv/` được tạo bằng lệnh cài đặt ở trên.
+## 2. Cài môi trường
 
-## 4. Vì sao không thấy `data/` trên GitHub?
+Khuyến nghị Python **3.10 hoặc 3.12**. Tạo và kích hoạt môi trường riêng cho dự án:
 
-`.gitignore` hiện bỏ qua các đường dẫn sau:
+```powershell
+conda create -n medical-seg python=3.12 -y
+conda activate medical-seg
+```
 
-| Quy tắc | Nội dung không đưa lên Git | Cách tái tạo/sử dụng |
+### Vì sao có hai file requirements?
+
+| File | Dùng khi nào? |
+| --- | --- |
+| `requirements.txt` | Chỉ tải/chuẩn bị dữ liệu, chạy notebook 01–02; không cần PyTorch |
+| `requirements-training.txt` | Chạy đầy đủ phần hiện có, gồm notebook 03; tự bao gồm file trên rồi thêm torch và PyYAML |
+
+**Không cần cài lần lượt cả hai.** Để chạy toàn bộ dự án hiện tại, chọn bản PyTorch phù hợp rồi cài `requirements-training.txt`. Tên file training chỉ nhóm thư viện phục vụ giai đoạn này, không có nghĩa vòng train đã hoàn thành.
+
+Máy có NVIDIA và driver tương thích CUDA 12.6:
+
+```powershell
+python -m pip install torch==2.9.1+cu126 --index-url https://download.pytorch.org/whl/cu126
+python -m pip install -r requirements-training.txt
+```
+
+Máy không có GPU NVIDIA có thể dùng CPU để chạy notebook và kiểm tra dữ liệu:
+
+```powershell
+python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements-training.txt
+```
+
+Chọn **một** bản CPU hoặc CUDA phù hợp với phần cứng và driver. Xem [các bản cài PyTorch chính thức](https://pytorch.org/get-started/previous-versions/#v291). Các transforms hiện tại chưa cần torchvision.
+
+Nếu chỉ chạy notebook 01–02: `python -m pip install -r requirements.txt` là đủ.
+
+## 3. Chạy bằng notebook
+
+Trong VS Code, mở notebook bằng **Jupyter Notebook**, chọn **Select Kernel** đúng môi trường đã cài, rồi **Restart Kernel → Run All**. Hoặc chạy `python -m jupyterlab` tại gốc repo và mở notebook trong JupyterLab.
+
+| Thứ tự | Notebook | Công việc |
 | --- | --- | --- |
-| `data/` | Hai dataset, ZIP/snapshot cache và manifest cục bộ | Chạy `src/datasets/downdata.ipynb` |
-| `checkpoints/` | Trọng số mô hình | Tạo khi train; chia sẻ trọng số lớn bằng link ngoài |
-| `logs/` | TensorBoard/W&B và log thực nghiệm cục bộ | Tạo khi chạy; chia sẻ log với giảng viên theo yêu cầu |
-| `__pycache__/` | Cache Python | Python tự tạo |
-| `.venv/` | Môi trường ảo | Cài lại từ `requirements.txt` |
-| `.ipynb_checkpoints/` | Bản lưu tự động của Jupyter | Jupyter tự tạo |
+| 01 | [01_download_data.ipynb](notebooks/01_download_data.ipynb) | Tải/xác minh nguồn, ghép ảnh–mask và xem mẫu |
+| 02 | [02_prepare_data.ipynb](notebooks/02_prepare_data.ipynb) | Thống kê, sàng lọc gần trùng, giữ nhóm và tạo split |
+| 03 | [03_data_pipeline.ipynb](notebooks/03_data_pipeline.ipynb) | Đọc batch, xem augmentation và kiểm tra metric |
 
-**Đưa lên Git:** notebook tải dữ liệu, code, cấu hình, `requirements.txt`, README, danh sách split đã chốt, bảng CSV và hình kết quả chọn lọc. `results/` không bị ignore.
+**Máy mới:** lấy đủ mã nguồn và đầu vào trong splits/ từ Git, cài thư viện rồi chạy **01 → 02 → 03**. Notebook 01 cần Internet để truy vấn nguồn; 02–03 dùng dữ liệu cục bộ. Không cần GPU cho bước tải/chuẩn bị.
 
-Không dùng `git add -f data/` để đẩy dữ liệu. `.gitignore` chỉ bỏ qua file chưa được theo dõi; nếu trước đó đã commit dữ liệu thì chỉ thêm quy tắc ignore sẽ không làm dữ liệu biến mất khỏi Git.
+**Đã có dữ liệu và split:** có thể chạy thẳng notebook 03. Không cần tải hoặc chia lại dữ liệu trước mỗi lần làm bài.
 
-## 5. Lưu ý trước khi triển khai huấn luyện
+Số notebook là thứ tự chạy. Bước 1 trong pipeline.md là chốt phạm vi/phân công; notebook 01–02 phục vụ chuẩn bị dữ liệu của bước 2, notebook 03 phục vụ bước 3.
 
-- Notebook **chưa tạo hoặc thay đổi các file trong `splits/`**. Nhóm phải kiểm tra trùng/gần trùng và chốt danh sách chia tập trước khi train. Tỉ lệ Kvasir dự kiến là 70/15/15; ghi rõ giới hạn nếu không có metadata bệnh nhân/chuỗi nội soi để chia theo nhóm.
-- Giữ CVC-ClinicDB làm tập đánh giá bên ngoài. Chọn checkpoint, loss, ngưỡng và siêu tham số trên validation của Kvasir-SEG.
-- Mask nguồn có thể là ảnh RGB và có mức xám ngoài `0/255` (đặc biệt JPG). Khi tạo tensor: chuyển grayscale rồi nhị phân hóa `pixel > 127` thành `0/1`. Không coi mọi pixel `> 0` là polyp. Notebook chỉ kiểm tra/hiển thị với ngưỡng này, giữ file nguồn nguyên vẹn.
-- Phép biến đổi hình học phải đồng bộ ảnh–mask; mask resize bằng nearest-neighbor; augmentation chỉ áp dụng ở train.
-- SAM zero-shot phải giữ trọng số cố định và khai báo nguồn prompt. Nếu điểm/box được tạo từ mask thật, ghi rõ **oracle prompt**, trình bày riêng với mô hình phân đoạn tự động.
-- `requirements.txt` hiện phục vụ bước dữ liệu/notebook. Thư viện train như PyTorch và các thư viện mô hình sẽ được bổ sung theo môi trường GPU khi triển khai; hiện chưa có lệnh train/evaluate hoạt động.
+Kết quả mong đợi: **700 train / 150 validation / 150 test**, **612 external**. Batch ảnh **[8,3,256,256]**, mask **[8,1,256,256]** chỉ chứa 0/1. Hình minh họa dùng mask thật; ví dụ metric chưa phải kết quả của mô hình.
 
-## 6. Các yêu cầu nộp bài cần theo dõi
+## 4. Chạy thay thế từ terminal
 
-Theo file đề bài của môn học:
+Đứng tại gốc repo và kích hoạt môi trường. Không cần chạy thêm notebook cho cùng công việc.
 
-- Nhóm 3 sinh viên, thực hiện trong 6 tuần. Tạo repo, mời giảng viên và chia sẻ log huấn luyện từ quá trình thực hiện.
-- Tối thiểu: tự cài U-Net; so sánh U-Net pretrained encoder; báo cáo Dice và IoU.
-- Mở rộng: SegFormer **hoặc** TransUNet; so sánh Dice/Focal/Tversky loss; đánh giá SAM zero-shot. Kế hoạch của repo chọn SegFormer và thử cả ba hướng mở rộng.
-- Cuối tuần 1: proposal tối đa 2 trang. Cuối tuần 3: milestone tối đa 4 trang. Tuần 6: bản cuối tối đa 8 trang nội dung, theo template ACL, viết tiếng Việt.
-- Báo cáo có mô tả phần tự cài/dùng thư viện, thiết lập thực nghiệm, ablation, phân tích lỗi, Limitations, đóng góp thành viên và khai báo sử dụng AI. Giữ đầy đủ trích dẫn nguồn dữ liệu/mã/pretrained weights.
-- Có hướng dẫn cài đặt, tải dữ liệu, train và đánh giá; script/notebook tái tạo bảng chính; slide 10–12 phút và demo nếu có. Hướng dẫn train/evaluate sẽ được cập nhật khi có triển khai thực tế.
-- Vấn đáp cá nhân chiếm 30%; dưới 4/10 thì tổng điểm bài tập lớn của sinh viên đó không vượt quá 5/10.
+```powershell
+# Chưa có dữ liệu: tải/xác minh trước, rồi tự chuẩn bị và chia tập
+python -m scripts.prepare_data --project-root . --download
+
+# Đã có dữ liệu: chỉ kiểm tra/tái tạo bước chuẩn bị
+python -m scripts.prepare_data --project-root .
+
+# Kiểm tra Dataset, transforms, batch và metric
+python -m scripts.preview_data --project-root .
+```
+
+Hai lệnh prepare_data là lựa chọn theo tình trạng dữ liệu, không cần chạy cả hai. Các script tự gọi module đúng thứ tự; không chạy từng file trong src/.
+
+Bảng, hình và báo cáo được code tự tạo cục bộ khi chạy; không cần chép output terminal hoặc đưa chúng lên Git. Notebook hiển thị hình trực tiếp, terminal in vị trí đã lưu để mở xem.
+
+Kiểm thử sau khi cài đầy đủ thư viện:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Chỉ kiểm thử phần chuẩn bị dữ liệu: `python -m unittest discover -s tests -p test_data_preparation.py -v`.
+
+## 5. Dữ liệu và quy tắc dùng chung
+
+| Dataset | Số cặp | Định dạng | Vai trò |
+| --- | ---: | --- | --- |
+| Kvasir-SEG | 1.000 | JPG, độ phân giải thay đổi | Train/validation/test nội bộ |
+| CVC-ClinicDB | 612 | PNG, 384×288 | Đánh giá ngoài, không tinh chỉnh |
+
+- **Kvasir:** [trang công bố Simula](https://datasets.simula.no/kvasir-seg/), [ZIP gốc](https://datasets.simula.no/downloads/kvasir-seg.zip). SHA-256 ZIP khóa trong download.py: `03b30e21d584e04facf49397a2576738fd626815771afbbf788f74a7153478f7`.
+- **ClinicDB:** [nguồn công bố](https://polyp.grand-challenge.org/CVCClinicDB/); tải từ [berkaytrhn/cvc-clinicdb](https://huggingface.co/datasets/berkaytrhn/cvc-clinicdb) với revision `07f1aae53befabc313f9435c8b1b9565642a36c8`. Module ánh xạ Original/Ground Truth sang images/masks, giữ nguyên byte.
+- Không ghi đè dữ liệu gốc khi resize. Mask chuyển grayscale rồi nhị phân hóa >127. Ảnh resize bilinear, mask nearest-neighbor; augmentation hình học đồng bộ và chỉ ở train. Tensor sau xử lý nằm trong RAM để mô hình sử dụng.
+- Cả nhóm dùng chung ID trong splits/, seed chia 42. Những file này và quyết định rà ảnh phải có trên Git; không chỉ giữ trong máy một người. Mỗi dòng split là ID không có đuôi ảnh.
+- Hash chỉ sàng lọc, unsure không có nghĩa là duplicate đã xác nhận. Giữ chung các quan hệ confirmed/unsure và công bố giới hạn thiếu metadata bệnh nhân. Quyết định rà đã lưu được đọc lại khi chạy trên máy khác.
+- Nếu có cặp chưa rà trong Kvasir/cross-dataset, notebook 02 sẽ yêu cầu cập nhật quyết định trước khi chia. Split đã có nội dung khác sẽ làm chương trình dừng; không tự xóa danh sách để vượt kiểm tra.
+- Chọn checkpoint, loss và threshold bằng validation Kvasir; không dùng test/ClinicDB để tinh chỉnh. Loader mặc định chỉ đọc train/validation; thêm test/external khi đánh giá cuối.
+- Metric tính từng ảnh rồi trung bình theo số ảnh. Resize logits về kích thước gốc trước sigmoid/threshold 0.5, so với mask thật gốc; không trung bình các batch mà bỏ qua số ảnh khác nhau ở batch cuối.
+- Trước khi commit notebook, dùng **Clear All Outputs** và lưu lại. Giữ code/Markdown trên Git, để mỗi thành viên tự tạo hình và kết quả bằng Run All.
+
+## 6. Phần tiếp theo
+
+Triển khai **U-Net tự cài → BCE+Dice → vòng train/validation → học thử 4–8 ảnh → train M1 đầy đủ**. Chưa có lệnh train hoạt động; phần training trong unet.yaml hiện là thông số khởi đầu.
+
+Theo đề bài: tối thiểu U-Net tự cài, so sánh pretrained U-Net, Dice/IoU; mở rộng SegFormer hoặc TransUNet, so sánh Dice/Focal/Tversky và SAM zero-shot. Đối chiếu tiến độ, báo cáo ACL, phân công và các mốc nộp trong pipeline.md.
 
 ## 7. Tài liệu tham khảo dữ liệu
 
-1. Jha, D., et al. (2020). *Kvasir-SEG: A Segmented Polyp Dataset*. International Conference on Multimedia Modeling, 451–462. <https://arxiv.org/abs/1911.07069>.
-2. Bernal, J., et al. (2015). *WM-DOVA maps for accurate polyp highlighting in colonoscopy: Validation vs. saliency maps from physicians*. Computerized Medical Imaging and Graphics, 43, 99–111. Xem thông tin trích dẫn tại <https://polyp.grand-challenge.org/CVCClinicDB/>.
+1. Jha, D., et al. (2020). *Kvasir-SEG: A Segmented Polyp Dataset*. MMM, 451–462. [Bài báo](https://arxiv.org/abs/1911.07069).
+2. Bernal, J., et al. (2015). *WM-DOVA maps for accurate polyp highlighting in colonoscopy: Validation vs. saliency maps from physicians*. Computerized Medical Imaging and Graphics, 43, 99–111. [Nguồn và trích dẫn](https://polyp.grand-challenge.org/CVCClinicDB/).

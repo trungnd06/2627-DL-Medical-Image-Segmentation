@@ -51,7 +51,7 @@ Chia công việc cho ba thành viên, ghi người phụ trách và người đ
 
 ### Bước 2 — Kiểm tra dữ liệu và cố định split
 
-Dùng notebook [downdata.ipynb](src/datasets/downdata.ipynb) để chuẩn bị dữ liệu. Giữ nguồn, checksum và revision như [README](README.md), không đổi mirror hoặc sửa dữ liệu nguồn khi chưa xác minh.
+Dùng notebook [01_download_data.ipynb](notebooks/01_download_data.ipynb) để chuẩn bị dữ liệu. Giữ nguồn, checksum và revision như [README](README.md), không đổi mirror hoặc sửa dữ liệu nguồn khi chưa xác minh.
 
 Thực hiện:
 
