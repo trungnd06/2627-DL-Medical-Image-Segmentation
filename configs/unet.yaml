@@ -1,4 +1,4 @@
-# M1 starting configuration; training loop/model are implemented in step 4.
+# M1: self-implemented UNet, masked BCE + Dice, original-resolution validation.
 experiment: M1_unet_bce_dice
 seed: 42
 data:
@@ -21,6 +21,8 @@ model:
   channels: [32, 64, 128, 256, 512]
   output_channels: 1
 training:
+  device: auto  # CUDA when available, otherwise CPU
+  amp: true     # FP16 mixed precision on CUDA; disabled automatically on CPU
   optimizer: Adam
   learning_rate: 0.0001
   weight_decay: 0.0
@@ -28,7 +30,7 @@ training:
   loss: bce_dice
   bce_weight: 1.0
   dice_weight: 1.0
-  ignore_padding: true   # future loss must use batch["valid_mask"]
+  ignore_padding: true   # BCE and soft Dice exclude batch padding via valid_mask
   scheduler:
     name: ReduceLROnPlateau
     monitor: val_dice

@@ -28,7 +28,7 @@ class SegmentationTransform:
 
     Geometry is applied before aspect-ratio-preserving resize and centered padding.
     No random augmentation is performed in evaluation mode. apply() also returns
-    valid_mask (exclude padding from future loss) and geometry for evaluation.
+    valid_mask (exclude padding from loss) and geometry for evaluation.
     """
 
     def __init__(self, size=(256, 256), training=False, mask_threshold=127,
