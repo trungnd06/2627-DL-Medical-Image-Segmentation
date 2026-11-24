@@ -6,7 +6,7 @@ Nhóm dự kiến so sánh U-Net tự cài, U-Net có pretrained encoder và Seg
 
 **Tổ chức code:** module Python chứa logic; notebook gọi module, giải thích bằng Markdown và hiển thị hình. Script là cách chạy thay thế từ terminal.
 
-**Trạng thái:** đã có chuẩn bị dữ liệu, split cố định, Dataset, transforms, DataLoader và metric. Mô hình, loss và vòng train/evaluate chưa triển khai. Các mục `[khung]` bên dưới chưa có chức năng chạy.
+**Trạng thái:** đã có chuẩn bị dữ liệu, split cố định, Dataset/transforms, metric, U-Net tự cài, BCE+Dice và vòng train/validation M1. Có chế độ smoke test, học khớp vài ảnh và train đầy đủ; chưa có kết quả baseline train đầy đủ. Các mục `[khung]` bên dưới chưa có chức năng chạy.
 
 ## 1. Cấu trúc dự án
 
@@ -22,7 +22,8 @@ Medical-Image-Segmentation/
 ├── notebooks/                        # Giải thích, gọi module và xem hình minh họa
 │   ├── 01_download_data.ipynb         # Tải/xác minh nguồn và xem mẫu ảnh–mask
 │   ├── 02_prepare_data.ipynb          # Thống kê, rà ảnh gần trùng và chia tập
-│   └── 03_data_pipeline.ipynb         # Kiểm tra batch, transforms và Dice/IoU
+│   ├── 03_data_pipeline.ipynb         # Kiểm tra batch, transforms và Dice/IoU
+│   └── 04_train_unet.ipynb            # Train M1 đầy đủ, xem biểu đồ và dự đoán
 ├── src/                              # Module dùng chung
 │   ├── __init__.py                   # Khai báo package src
 │   ├── datasets/
@@ -38,24 +39,26 @@ Medical-Image-Segmentation/
 │   │   ├── transforms.py             # Giữ tỷ lệ, padding giữa ảnh, augmentation
 │   │   └── preview.py                # Minh họa ảnh–mask trước/sau transforms
 │   ├── models/
-│   │   ├── unet.py                   # [khung] U-Net tự cài, M1
+│   │   ├── unet.py                   # U-Net tự cài, logits một kênh, M1
 │   │   ├── pretrained_unet.py        # [khung] U-Net–ResNet34, M2/A1
 │   │   ├── segformer.py              # [khung] SegFormer-B0, M3
 │   │   └── sam.py                    # [khung] SAM zero-shot, S1/S2
 │   ├── metrics.py                    # Dice/IoU/Precision/Recall theo từng ảnh
 │   ├── utils.py                      # Đặt seed và đọc config YAML
-│   ├── losses.py                     # [khung] BCE+Dice, Focal, Tversky
-│   └── engine.py                     # [khung] Vòng train/validation
+│   ├── losses.py                     # BCE+soft Dice, bỏ pixel padding
+│   ├── engine.py                     # Train/validation và tổng hợp metric
+│   ├── training.py                   # Điều phối smoke/overfit/full, lưu checkpoint
+│   └── visualization.py              # Vẽ kiến trúc, learning curve và overlay
 ├── scripts/                          # Các lệnh chạy từ terminal
 │   ├── __init__.py                   # Hỗ trợ python -m scripts.<tên>
 │   ├── prepare_data.py               # Chuẩn bị/chia tập; --download để tải trước
 │   ├── preview_data.py               # Kiểm tra đầu vào và xuất hình transforms
-│   ├── train.py                      # [khung] Khởi chạy huấn luyện
+│   ├── train.py                      # Chạy M1 từ terminal
 │   ├── evaluate.py                   # [khung] Đánh giá mô hình đã train
 │   ├── evaluate_sam.py               # [khung] Đánh giá SAM có prompt
 │   └── predict.py                    # [khung] Dự đoán mask từ ảnh
 ├── configs/                          # Thông số thí nghiệm
-│   ├── unet.yaml                     # Preprocessing/loader và cấu hình M1 dự kiến
+│   ├── unet.yaml                     # Preprocessing/loader và cấu hình train M1
 │   ├── pretrained_unet.yaml          # [khung] Cấu hình M2/A1
 │   ├── segformer.yaml                # [khung] Cấu hình M3
 │   └── sam.yaml                      # [khung] Cấu hình SAM/prompt
@@ -67,7 +70,9 @@ Medical-Image-Segmentation/
 │   └── duplicate_review.csv          # Quyết định rà ảnh để tái tạo cách chia
 ├── tests/                            # Kiểm thử code, khác tập dữ liệu test
 │   ├── test_data_preparation.py      # Kiểm tra nguồn, chia tập và chống ghi đè
-│   └── test_training_data.py         # Kiểm tra transforms, loader và metric
+│   ├── test_training_data.py         # Kiểm tra transforms, loader và metric
+│   ├── test_unet.py                  # Kiểm tra U-Net forward/backward
+│   └── test_training.py              # Kiểm tra loss bỏ padding và lượt train nhỏ
 ├── report/                           # Báo cáo ACL tiếng Việt
 │   ├── main.tex                      # [khung] Nội dung báo cáo
 │   └── references.bib                # [khung] Trích dẫn BibTeX
@@ -96,9 +101,9 @@ conda activate medical-seg
 | File | Dùng khi nào? |
 | --- | --- |
 | `requirements.txt` | Chỉ tải/chuẩn bị dữ liệu, chạy notebook 01–02; không cần PyTorch |
-| `requirements-training.txt` | Chạy đầy đủ phần hiện có, gồm notebook 03; tự bao gồm file trên rồi thêm torch và PyYAML |
+| `requirements-training.txt` | Chạy đầy đủ phần hiện có, gồm notebook 03–04; tự bao gồm file trên rồi thêm torch và PyYAML |
 
-**Không cần cài lần lượt cả hai.** Để chạy toàn bộ dự án hiện tại, chọn bản PyTorch phù hợp rồi cài `requirements-training.txt`. Tên file training chỉ nhóm thư viện phục vụ giai đoạn này, không có nghĩa vòng train đã hoàn thành.
+**Không cần cài lần lượt cả hai.** Để chạy toàn bộ dự án hiện tại, chọn bản PyTorch phù hợp rồi cài `requirements-training.txt`.
 
 Máy có NVIDIA và driver tương thích CUDA 12.6:
 
@@ -127,10 +132,13 @@ Trong VS Code, mở notebook bằng **Jupyter Notebook**, chọn **Select Kernel
 | 01 | [01_download_data.ipynb](notebooks/01_download_data.ipynb) | Tải/xác minh nguồn, ghép ảnh–mask và xem mẫu |
 | 02 | [02_prepare_data.ipynb](notebooks/02_prepare_data.ipynb) | Thống kê, sàng lọc gần trùng, giữ nhóm và tạo split |
 | 03 | [03_data_pipeline.ipynb](notebooks/03_data_pipeline.ipynb) | Đọc batch, xem augmentation và kiểm tra metric |
+| 04 | [04_train_unet.ipynb](notebooks/04_train_unet.ipynb) | Train U-Net M1 đầy đủ, xem biểu đồ và dự đoán |
 
 **Máy mới:** lấy đủ mã nguồn và đầu vào trong splits/ từ Git, cài thư viện rồi chạy **01 → 02 → 03**. Notebook 01 cần Internet để truy vấn nguồn; 02–03 dùng dữ liệu cục bộ. Không cần GPU cho bước tải/chuẩn bị.
 
 **Đã có dữ liệu và split:** có thể chạy thẳng notebook 03. Không cần tải hoặc chia lại dữ liệu trước mỗi lần làm bài.
+
+Sau notebook 03, mở **04_train_unet.ipynb**: **Restart Kernel → Run All** sẽ chạy M1 trên toàn bộ split cố định, mặc định 700 train / 150 validation, tối đa 200 epoch và early stopping patience 20. Notebook chỉ có luồng train đầy đủ, giữ log từng epoch và tắt thanh tiến trình từng batch. Muốn xem lại biểu đồ từ kết quả đã lưu, chỉ chạy ô cuối, không Run All. Brightness/contrast chưa được thêm; train dùng lật/xoay từ bước 3. Chế độ học khớp vài ảnh vẫn có ở CLI để kiểm tra khi cần.
 
 Số notebook là thứ tự chạy. Bước 1 trong pipeline.md là chốt phạm vi/phân công; notebook 01–02 phục vụ chuẩn bị dữ liệu của bước 2, notebook 03 phục vụ bước 3.
 
@@ -149,9 +157,24 @@ python -m scripts.prepare_data --project-root .
 
 # Kiểm tra Dataset, transforms, batch và metric
 python -m scripts.preview_data --project-root .
+
+# Kiểm tra một epoch với 8 train + tối đa 8 validation (không phải baseline)
+python -m scripts.train --project-root . --mode smoke
+
+# Học khớp 8 ảnh train, tắt augmentation, LR cố định, chạy đủ số epoch
+python -m scripts.train --project-root . --mode overfit --samples 8 --epochs 200
+
+# Sau khi overfit ổn và rà dữ liệu: train M1 đầy đủ bằng config
+python -m scripts.train --project-root . --mode full
 ```
 
 Hai lệnh prepare_data là lựa chọn theo tình trạng dữ liệu, không cần chạy cả hai. Các script tự gọi module đúng thứ tự; không chạy từng file trong src/.
+
+Training tự chọn CUDA nếu có, nếu không dùng CPU; AMP FP16 chỉ bật trên CUDA. Có thể thêm `--device cuda`, `--device cpu`, `--batch-size 4` hoặc `--epochs 20`; cấu hình thực tế được lưu theo run. Mỗi lệnh bắt đầu một run mới, chưa có CLI resume. Nếu thiếu VRAM, giảm batch size trước rồi ghi nhận thay đổi khi so sánh.
+
+Mỗi run lưu tại **`results/M1/<run_id>/`**: `best.pt`/`last.pt`, `history.csv`, metric từng ảnh tại best epoch, config/metadata, hình kiến trúc, learning curve và overlay trước/sau. Không đưa kết quả/trọng số lên Git. Best checkpoint theo validation Dice cao nhất, hòa giữ epoch sớm hơn; scheduler và early stopping chỉ áp dụng cho smoke/full. Trong overfit, dữ liệu đo cũng là tập nhỏ dùng train, không dùng điểm này làm baseline. Test/ClinicDB không được nạp trong bước train.
+
+`learning_curves.png` gồm bốn biểu đồ: loss, Dice, IoU của train/validation và learning rate; đánh dấu epoch có validation Dice cao nhất. Log từng epoch vẫn được giữ. Có thể vẽ lại bất cứ lúc nào từ CSV bằng `from src.visualization import plot_run_history`, rồi `plot_run_history(run_dir)`; không cần train hoặc nạp checkpoint. Notebook 04 có ô riêng để chọn thư mục run và hiển thị hình sau khi restart kernel.
 
 Bảng, hình và báo cáo được code tự tạo cục bộ khi chạy; không cần chép output terminal hoặc đưa chúng lên Git. Notebook hiển thị hình trực tiếp, terminal in vị trí đã lưu để mở xem.
 
@@ -173,19 +196,22 @@ Chỉ kiểm thử phần chuẩn bị dữ liệu: `python -m unittest discover
 - **Kvasir:** [trang công bố Simula](https://datasets.simula.no/kvasir-seg/), [ZIP gốc](https://datasets.simula.no/downloads/kvasir-seg.zip). SHA-256 ZIP khóa trong download.py: `03b30e21d584e04facf49397a2576738fd626815771afbbf788f74a7153478f7`.
 - **ClinicDB:** [nguồn công bố](https://polyp.grand-challenge.org/CVCClinicDB/); tải từ [berkaytrhn/cvc-clinicdb](https://huggingface.co/datasets/berkaytrhn/cvc-clinicdb) với revision `07f1aae53befabc313f9435c8b1b9565642a36c8`. Module ánh xạ Original/Ground Truth sang images/masks, giữ nguyên byte.
 - Không ghi đè dữ liệu gốc khi resize. Mask chuyển grayscale rồi nhị phân hóa >127. Resize giữ tỷ lệ (sai số làm tròn pixel) bằng bilinear cho ảnh, nearest-neighbor cho mask; sau đó padding đủ 256×256, đặt ảnh ở giữa. Padding ảnh màu đen trước normalization, nhãn padding là 0; nếu chênh lệch lẻ, bên phải/dưới nhận thêm 1 pixel. Augmentation đồng bộ ảnh–mask, chỉ ở train và thực hiện trước resize/padding.
-- Dataset trả `valid_mask` để phân biệt vùng ảnh thật với padding, cùng `geometry` gồm kích thước gốc/sau resize/đầu vào và padding `(left, top, right, bottom)`. Khi viết loss ở bước 4, phải dùng valid_mask để loại vùng padding khỏi BCE, Dice và các loss khác; hiện chưa có vòng train hoặc loss thực thi cấu hình này.
+- Dataset trả `valid_mask` để phân biệt vùng ảnh thật với padding, cùng `geometry` gồm kích thước gốc/sau resize/đầu vào và padding `(left, top, right, bottom)`. BCE+Dice M1 đã dùng valid_mask: BCE trung bình trên pixel hợp lệ, soft Dice trung bình từng ảnh. Các loss bổ sung ở bước sau cũng phải bỏ padding.
 - Cả nhóm dùng chung ID trong splits/, seed chia 42. Những file này và quyết định rà ảnh phải có trên Git; không chỉ giữ trong máy một người. Mỗi dòng split là ID không có đuôi ảnh.
 - Hash dùng ảnh thu nhỏ giữ tỷ lệ bằng Lanczos rồi padding đen ở giữa: RGB 64×64, dHash 9×8 và pHash 32×32. Padding chia đều hai phía; phần dư 1 pixel nằm bên phải/dưới. Không sửa file ảnh gốc. Phiên bản phương pháp và Pillow được ghi trong `logs/duplicate_check/screening_manifest.json` khi chạy sàng lọc.
 - Hash chỉ sàng lọc, unsure không có nghĩa là duplicate đã xác nhận. Viền padding cũng ảnh hưởng hash, vì vậy vẫn phải rà ảnh gốc; giữ tỷ lệ không bảo đảm phát hiện gần trùng chính xác hơn. Giữ chung các quan hệ confirmed/unsure và công bố giới hạn thiếu metadata bệnh nhân. Quyết định rà đã lưu được đọc lại khi chạy trên máy khác.
 - Khi đổi phương pháp hash, giữ lại các cặp đã có quyết định, kể cả khi vượt ngưỡng mới; các cặp mới nhận `pending`, các dòng pending cũ không còn là ứng viên được bỏ khỏi lần sàng lọc mới. Số ứng viên có thể khác báo cáo cũ. Không tự đổi split đã chốt.
 - Nếu có cặp chưa rà trong Kvasir/cross-dataset, notebook 02 sẽ yêu cầu cập nhật quyết định trước khi chia. Split đã có nội dung khác sẽ làm chương trình dừng; không tự xóa danh sách để vượt kiểm tra.
+- Training kiểm tra checksum ảnh/mask train/val và lưu hash split/code theo run. Nếu split manifest chưa ghi phương pháp hash hiện tại hoặc snapshot review còn pending Kvasir/cross, lượt train được cảnh báo và đánh dấu provisional trong metadata; hoàn tất rà dữ liệu ở notebook 02 trước khi dùng kết quả báo cáo chính thức. Không tự chia lại hoặc sửa quyết định rà khi train.
 - Chọn checkpoint, loss và threshold bằng validation Kvasir; không dùng test/ClinicDB để tinh chỉnh. Loader mặc định chỉ đọc train/validation; thêm test/external khi đánh giá cuối.
 - Metric tính từng ảnh rồi trung bình theo số ảnh. Gọi `metrics_at_original_size(logits, original_masks, geometries, threshold=0.5)` với `batch["geometry"]`: bỏ đúng padding khỏi logits, resize phần nội dung về kích thước gốc, rồi mới sigmoid/threshold. Không resize cả vùng viền về ảnh gốc. Nếu tính metric ở kích thước đầu vào, truyền `valid_mask` cho binary_metrics. Không trung bình các batch mà bỏ qua số ảnh khác nhau ở batch cuối.
 - Trước khi commit notebook, dùng **Clear All Outputs** và lưu lại. Giữ code/Markdown trên Git, để mỗi thành viên tự tạo hình và kết quả bằng Run All.
 
 ## 6. Phần tiếp theo
 
-Triển khai **U-Net tự cài → BCE+Dice → vòng train/validation → học thử 4–8 ảnh → train M1 đầy đủ**. Chưa có lệnh train hoạt động; phần training trong unet.yaml hiện là thông số khởi đầu.
+Đã có **U-Net tự cài** trong `src/models/unet.py`: encoder `32/64/128/256`, bottleneck `512`, hai Conv3×3 + ReLU mỗi khối, MaxPool và ConvTranspose2d cùng skip connection. Không BatchNorm hoặc sigmoid cuối; trả logits cùng kích thước không gian với ảnh đầu vào. Ví dụ gọi: `from src.models.unet import UNet`, rồi `model = UNet()` và `logits = model(batch["image"])` (model và batch phải cùng device). Có thể truyền `channels` và `output_channels` từ mục `model` trong `configs/unet.yaml`; `name` dùng để chọn model, không truyền vào constructor.
+
+Code bước 4 đã có. Tiếp theo cần **chạy overfit và kiểm tra hình → hoàn tất rà dữ liệu → train M1 đầy đủ → lưu kết quả baseline thực tế**. Sau đó chuyển sang pretrained U-Net M2 ở bước 5; chưa triển khai M2/A1, SegFormer, Focal/Tversky hoặc SAM.
 
 Theo đề bài: tối thiểu U-Net tự cài, so sánh pretrained U-Net, Dice/IoU; mở rộng SegFormer hoặc TransUNet, so sánh Dice/Focal/Tversky và SAM zero-shot. Đối chiếu tiến độ, báo cáo ACL, phân công và các mốc nộp trong pipeline.md.
 
