@@ -1,9 +1,13 @@
-data/
-checkpoints/*
-!checkpoints/.gitkeep
-logs/*
-!logs/.gitkeep
-__pycache__/
-.venv/
-.ipynb_checkpoints/
-/test.ipynb
+# Generated results
+/results/
+
+# Local notes and scratch files
+/AGENTS.md
+/note.md
+/debug.log
+
+# Generated split metadata
+/splits/group_assignments.csv
+/splits/excluded_kvasir.csv
+/splits/source_fingerprints.csv
+/splits/split_manifest.json
