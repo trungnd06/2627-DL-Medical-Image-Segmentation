@@ -9,12 +9,49 @@ from PIL import Image
 
 from test_data_preparation import temporary_workspace
 from src.datasets.dataset import PolypDataset, collate_samples, create_dataloaders
-from src.datasets.transforms import SegmentationTransform, binarize_mask, pil_to_tensor
-from src.metrics import binary_metrics, metrics_at_original_size
+from src.datasets.transforms import SegmentationTransform, binarize_mask, pil_to_tensor, letterbox_geometry
+from src.metrics import binary_metrics, metrics_at_original_size, restore_original_logits
 from src.utils import load_config
 
 
 class TransformTests(unittest.TestCase):
+    def test_letterbox_centers_landscape_portrait_and_odd_padding(self):
+        for source_hw, expected_hw, expected_pad in (
+            ((400, 800), (128, 256), (0, 64, 0, 64)),
+            ((800, 400), (256, 128), (64, 0, 64, 0)),
+            ((3, 5), (154, 256), (0, 51, 0, 51)),
+        ):
+            with self.subTest(source=source_hw):
+                geometry = letterbox_geometry(source_hw, (256, 256))
+                self.assertEqual(geometry["resized_size"], expected_hw)
+                self.assertEqual(geometry["padding"], expected_pad)
+        geometry = letterbox_geometry((3, 5), (8, 8))
+        self.assertEqual(geometry["padding"], (0, 1, 0, 2))
+        for source_hw in ((3, 5), (5, 3), (1, 10000), (10000, 1), (5, 5)):
+            result = SegmentationTransform(8).apply(
+                Image.new("RGB", source_hw[::-1], "white"), Image.new("L", source_hw[::-1], 255))
+            height, width = result["geometry"]["resized_size"]
+            left, top, right, bottom = result["geometry"]["padding"]
+            self.assertLessEqual(abs(left - right), 1)
+            self.assertLessEqual(abs(top - bottom), 1)
+            self.assertEqual(result["valid_mask"].sum().item(), height * width)
+            self.assertTrue(torch.equal(result["mask"].bool(), result["valid_mask"]))
+            restored_rgb = SegmentationTransform(8).denormalize(result["image"])
+            self.assertTrue(torch.allclose(restored_rgb[:, ~result["valid_mask"][0]],
+                                           torch.zeros_like(restored_rgb[:, ~result["valid_mask"][0]]), atol=1e-6))
+
+    def test_augmented_nonsquare_content_stays_aligned(self):
+        # Resize is identity for the content, padding only: exact pixel matching.
+        mask = Image.new("L", (6, 3)); mask.putpixel((1, 0), 255)
+        image = Image.merge("RGB", (mask, mask, mask))
+        transform = SegmentationTransform(6, training=True, mean=(0, 0, 0), std=(1, 1, 1))
+        for seed in range(8):
+            random.seed(seed)
+            result = transform.apply(image, mask)
+            self.assertTrue(torch.equal(result["image"][0], result["mask"][0]))
+            self.assertEqual(result["mask"].sum().item(), 1)
+            self.assertEqual(result["valid_mask"].sum().item(), 18)
+
     def test_geometry_is_paired_and_eval_is_deterministic(self):
         mask = Image.new("L", (4, 4)); mask.putpixel((0, 1), 255); mask.putpixel((2, 3), 255)
         image = Image.merge("RGB", (mask, mask, mask))
@@ -68,6 +105,12 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(batch["original_size"], [(3, 5), (6, 4)])
         self.assertEqual(batch["original_mask"][0].shape, (1, 3, 5))
         self.assertEqual(batch["original_mask"][1].shape, (1, 6, 4))
+        self.assertEqual(batch["valid_mask"].shape, (2, 1, 8, 8))
+        self.assertEqual(batch["geometry"][0]["padding"], (0, 1, 0, 2))
+        self.assertEqual(batch["geometry"][1]["padding"], (1, 0, 2, 0))
+        scores = metrics_at_original_size(batch["mask"] * 40 - 20,
+                                          batch["original_mask"], batch["geometry"])
+        self.assertTrue(torch.equal(scores["dice"], torch.ones(2)))
 
     def test_reject_duplicate_missing_and_augmentation_on_eval(self):
         path = self.root / "splits/kvasir_train.txt"
@@ -112,10 +155,39 @@ class MetricTests(unittest.TestCase):
     def test_resize_logits_before_sigmoid_and_keep_original_dimensions(self):
         logits = torch.tensor([[[[-100., 2.]]]])
         original = torch.tensor([[[0., 0., 0., 1.]]])
-        scores = metrics_at_original_size(logits, [original])
+        geometry = {**letterbox_geometry((1, 4), (1, 2)), "original_size": (1, 4), "augmented": False}
+        scores = metrics_at_original_size(logits, [original], [geometry])
         # Interpolating probabilities instead would label the third pixel positive.
         self.assertEqual(scores["dice"].item(), 1)
         self.assertEqual(scores["iou"].item(), 1)
+
+    def test_padded_foreground_never_counts_at_original_resolution(self):
+        for original_size in ((3, 5), (5, 3)):
+            transformed = SegmentationTransform(8).apply(
+                Image.new("RGB", original_size[::-1]), Image.new("L", original_size[::-1]))
+            valid = transformed["valid_mask"].unsqueeze(0)
+            # All false positives are in padding. Real content is background.
+            logits = torch.where(valid, -10., 100.)
+            original_mask = torch.zeros((1, *original_size))
+            restored = restore_original_logits(logits, [transformed["geometry"]])[0]
+            self.assertEqual(tuple(restored.shape), (1, 1, *original_size))
+            self.assertTrue(torch.allclose(restored, torch.full_like(restored, -10.)))
+            scores = metrics_at_original_size(logits, [original_mask], [transformed["geometry"]])
+            self.assertEqual(scores["dice"].item(), 1)
+            network_scores = binary_metrics(logits, torch.zeros_like(logits), valid_mask=valid)
+            self.assertEqual(network_scores["dice"].item(), 1)
+            self.assertEqual(binary_metrics(logits, torch.zeros_like(logits))["dice"].item(), 0)
+
+    def test_restore_supports_low_resolution_decoder_and_rejects_wrong_metadata(self):
+        geometry = {**letterbox_geometry((3, 5), (8, 8)), "original_size": (3, 5), "augmented": False}
+        restored = restore_original_logits(torch.full((1, 1, 2, 2), -5.), [geometry])[0]
+        self.assertEqual(tuple(restored.shape), (1, 1, 3, 5))
+        for invalid in ({**geometry, "augmented": True}, {**geometry, "padding": (0, 0, 0, 0)}):
+            with self.assertRaises(ValueError):
+                restore_original_logits(torch.zeros(1, 1, 8, 8), [invalid])
+        with self.assertRaises(ValueError):
+            binary_metrics(torch.zeros(1, 1, 8, 8), torch.zeros(1, 1, 8, 8),
+                           valid_mask=torch.zeros(1, 1, 8, 8))
 
     def test_reject_soft_target_and_nonfinite_prediction(self):
         with self.assertRaises(ValueError):

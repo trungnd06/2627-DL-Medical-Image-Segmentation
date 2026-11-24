@@ -3,6 +3,8 @@ experiment: M1_unet_bce_dice
 seed: 42
 data:
   image_size: [256, 256]  # height, width
+  resize_mode: letterbox  # preserve aspect ratio; center with equal padding
+  image_pad_value: 0      # black RGB padding before ImageNet normalization
   mask_threshold: 127
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
@@ -26,6 +28,7 @@ training:
   loss: bce_dice
   bce_weight: 1.0
   dice_weight: 1.0
+  ignore_padding: true   # future loss must use batch["valid_mask"]
   scheduler:
     name: ReduceLROnPlateau
     monitor: val_dice

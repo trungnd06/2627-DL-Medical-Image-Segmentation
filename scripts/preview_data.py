@@ -34,6 +34,10 @@ def check_pipeline(project_root=None, config_path="configs/unet.yaml"):
             raise ValueError(f"{name}: nonfinite image")
         if not ((current["mask"] == 0) | (current["mask"] == 1)).all():
             raise ValueError(f"{name}: nonbinary mask")
+        if current["valid_mask"].shape != current["mask"].shape or not current["valid_mask"].flatten(1).any(1).all():
+            raise ValueError(f"{name}: invalid content mask")
+        if current["mask"][~current["valid_mask"]].any():
+            raise ValueError(f"{name}: padding must have background labels")
 
     # Analytical examples, not model predictions or reported experimental scores.
     truth = torch.tensor([[[1., 0.], [0., 0.]], [[0., 0.], [0., 0.]]])
@@ -45,7 +49,7 @@ def check_pipeline(project_root=None, config_path="configs/unet.yaml"):
         raise RuntimeError("Disjoint-mask metric check failed")
     # Exercise variable-resolution evaluation with dummy background logits only.
     dummy = torch.full_like(val_batch["mask"], -20)
-    original_scores = metrics_at_original_size(dummy, val_batch["original_mask"])
+    original_scores = metrics_at_original_size(dummy, val_batch["original_mask"], val_batch["geometry"])
     if len(original_scores["dice"]) != len(val_batch["image_id"]):
         raise RuntimeError("Original-resolution batch length differs")
     seed_everything(config["seed"])
@@ -55,8 +59,11 @@ def check_pipeline(project_root=None, config_path="configs/unet.yaml"):
         "sample_counts": {name: len(loader.dataset) for name, loader in loaders.items()},
         "train_image_shape": list(batch["image"].shape), "train_mask_shape": list(batch["mask"].shape),
         "mask_values": sorted(batch["mask"].unique().tolist()),
+        "resize_mode": config["data"]["resize_mode"],
+        "validation_geometry": val_batch["geometry"],
+        "train_valid_pixel_counts": batch["valid_mask"].flatten(1).sum(1).tolist(),
         "validation_original_sizes": [list(size) for size in val_batch["original_size"]],
-        "checks": {"batch_shapes_valid": True, "binary_masks": True,
+        "checks": {"batch_shapes_valid": True, "binary_masks": True, "padding_masks_valid": True,
                    "analytical_metric_cases": True, "original_resolution_path": True},
         "python": platform.python_version(), "torch": torch.__version__,
         "config": config, "figure": figure.relative_to(root).as_posix(),

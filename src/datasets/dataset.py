@@ -22,7 +22,8 @@ class PolypDataset(Dataset):
     """Read IDs only from a committed split; optionally retain original masks.
 
     original_size is (height, width). original_mask stays at source resolution
-    for evaluation, while mask is resized to model-input resolution.
+    for evaluation. mask/valid_mask use padded input resolution; geometry records
+    the exact content rectangle so evaluation can remove padding first.
     """
 
     def __init__(self, project_root, split="train", transform=None,
@@ -76,8 +77,9 @@ class PolypDataset(Dataset):
         original_mask = None
         if self.return_original_mask:
             original_mask = pil_to_tensor(binarize_mask(mask, self.transform.mask_threshold))
-        image_tensor, mask_tensor = self.transform(image, mask)
-        sample = {"image": image_tensor, "mask": mask_tensor,
+        transformed = self.transform.apply(image, mask)
+        sample = {"image": transformed["image"], "mask": transformed["mask"],
+                  "valid_mask": transformed["valid_mask"], "geometry": transformed["geometry"],
                   "image_id": f"{self.dataset_name}/{filename}", "original_size": original_size}
         if original_mask is not None:
             sample["original_mask"] = original_mask
@@ -90,6 +92,8 @@ def collate_samples(samples):
         raise ValueError("Cannot collate an empty batch")
     batch = {"image": torch.stack([s["image"] for s in samples]),
              "mask": torch.stack([s["mask"] for s in samples]),
+             "valid_mask": torch.stack([s["valid_mask"] for s in samples]),
+             "geometry": [s["geometry"] for s in samples],
              "image_id": [s["image_id"] for s in samples],
              "original_size": [s["original_size"] for s in samples]}
     has_original = ["original_mask" in s for s in samples]
@@ -111,6 +115,7 @@ def create_dataloaders(project_root, config, include_test=False):
         name: SegmentationTransform(
             size=tuple(data["image_size"]), training=name == "train",
             mask_threshold=data["mask_threshold"], mean=data["mean"], std=data["std"],
+            resize_mode=data["resize_mode"], image_pad_value=data["image_pad_value"],
             horizontal_flip=augmentation["horizontal_flip"],
             vertical_flip=augmentation["vertical_flip"], rotate90=augmentation["rotate90"])
         for name in ("train", "val", "test", "external")

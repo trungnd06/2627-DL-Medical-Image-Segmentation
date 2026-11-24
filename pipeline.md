@@ -76,11 +76,11 @@ Nếu không có metadata bệnh nhân/chuỗi nội soi, ghi rõ chỉ kiểm s
 #### 3.1. Ảnh và mask
 
 - Ảnh chuyển RGB. Mask chuyển grayscale rồi nhị phân hóa `pixel > 127` thành `0/1`; không dùng điều kiện `pixel > 0` cho mask JPG.
-- CNN và SegFormer bắt đầu với ảnh `256 × 256`. Resize ảnh bằng bilinear, mask bằng nearest-neighbor.
+- CNN và SegFormer dùng khung đầu vào `256 × 256`: resize giữ tỷ lệ (làm tròn tới pixel) bằng bilinear cho ảnh, nearest-neighbor cho mask, rồi padding đặt ảnh ở giữa. Chia đều trái/phải hoặc trên/dưới; nếu tổng padding lẻ, phần dư 1 pixel nằm bên phải/dưới. Padding RGB màu đen trước normalization, padding mask bằng 0.
 - Cấu hình khởi đầu dùng ảnh trong khoảng `[0,1]`, chuẩn hóa ImageNet: mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]`; kiểm tra tính tương thích với checkpoint encoder đã chọn và giữ nhất quán trong các cặp ablation.
 - Augmentation khởi đầu: lật ngang `p=0.5`, lật dọc `p=0.5`, xoay ngẫu nhiên một trong bốn góc `0/90/180/270°`. Áp dụng hình học đồng bộ ảnh–mask, chỉ ở train. Nếu thêm biến đổi màu, chỉ áp dụng lên ảnh và ghi tham số.
 - Validation/test không augmentation ngẫu nhiên. Không tính thống kê chuẩn hóa hoặc chọn augmentation từ test.
-- Lưu kích thước gốc để đánh giá. SAM dùng preprocessing riêng theo triển khai SAM đã chọn, không ép dùng pipeline resize/normalize của U-Net.
+- Dataset lưu geometry gồm kích thước gốc, kích thước nội dung sau resize, kích thước khung và padding `(left, top, right, bottom)`; trả valid_mask đánh dấu vùng ảnh thật. Augmentation hình học thực hiện trước resize/padding. Validation/test không augmentation nên có thể bỏ padding để đưa dự đoán về ảnh gốc. SAM dùng preprocessing riêng, không ép dùng letterbox của U-Net.
 
 Độ phân giải lớn hơn hoặc augmentation khác chỉ được chọn trong giai đoạn phát triển bằng validation. Khóa thiết lập trước bảng so sánh chính; nếu muốn phân tích riêng độ phân giải, đặt mã thí nghiệm riêng.
 
@@ -109,8 +109,8 @@ Các kiến trúc có thể cần LR khác nhau. Nếu tinh chỉnh riêng, dùn
 
 #### 3.3. Dự đoán và metric
 
-- Mô hình train xuất logits một kênh; target nhị phân có shape tương thích. Không sigmoid trước `BCEWithLogitsLoss`.
-- Khi đánh giá CNN/SegFormer, resize logits về kích thước gốc bằng bilinear với `align_corners=False`, sau đó sigmoid và nhị phân hóa bằng `probability >= 0.5`.
+- Mô hình train xuất logits một kênh; target nhị phân có shape tương thích. Không sigmoid trước `BCEWithLogitsLoss`. Khi viết loss ở bước 4, dùng valid_mask để loại padding: BCE lấy tổng loss trên vùng hợp lệ chia số pixel hợp lệ, Dice/Tversky chỉ tổng hợp vùng hợp lệ; Focal cũng bỏ các pixel padding. Chuẩn bị mask không tự thay thế cho việc áp dụng nó trong loss.
+- Khi đánh giá CNN/SegFormer, đưa logits decoder về khung đầu vào nếu cần, bỏ padding theo geometry của từng ảnh, rồi resize phần nội dung về kích thước gốc bằng bilinear với `align_corners=False`. Sau đó mới sigmoid và nhị phân hóa bằng `probability >= 0.5`. Không resize cả khung có padding về ảnh gốc.
 - Giữ mask thật ở kích thước gốc. Tính Dice và IoU của lớp polyp trên từng ảnh, rồi lấy trung bình; không trộn với IoU nền hoặc thay bằng cách gộp toàn bộ pixel.
 - Dice và IoU đánh giá tính từ mask nhị phân, phân biệt với soft Dice dùng để train.
 - Nếu cả dự đoán và nhãn rỗng: Dice/IoU = 1; nếu chỉ một trong hai rỗng: Dice/IoU = 0. Precision/Recall bổ sung dùng giá trị 0 khi mẫu số bằng 0; công bố quy ước và số ca liên quan.
@@ -168,7 +168,7 @@ Cấu hình khởi đầu:
 | Binary Focal | `-alpha_t * (1-p_t)^gamma * log(p_t)`; `alpha=0.25` cho foreground, `1-alpha` cho background; `gamma=2` |
 | Tversky | `1 - (TP + eps) / (TP + alpha*FP + beta*FN + eps)`; `alpha=0.3`, `beta=0.7`, `eps=1e-6` |
 
-Trong loss, `p = sigmoid(logits)`, `y` là mask 0/1; `p_t = p` nếu `y=1`, ngược lại `p_t = 1-p`. TP/FP/FN là các tổng mềm: `sum(p*y)`, `sum(p*(1-y))`, `sum((1-p)*y)`. Dice/Tversky tính trên từng ảnh rồi trung bình batch; Focal lấy trung bình pixel và batch. Khi triển khai Focal, dùng dạng số học ổn định từ logits.
+Trong loss, `p = sigmoid(logits)`, `y` là mask 0/1; `p_t = p` nếu `y=1`, ngược lại `p_t = 1-p`. Với `v = valid_mask`, TP/FP/FN là các tổng mềm trên vùng ảnh thật: `sum(v*p*y)`, `sum(v*p*(1-y))`, `sum(v*(1-p)*y)`. Dice/Tversky tính trên từng ảnh rồi trung bình batch; BCE/Focal chỉ lấy trung bình pixel hợp lệ. Khi triển khai Focal, dùng dạng số học ổn định từ logits.
 
 Các hệ số trên là đề xuất khởi đầu. Nếu tinh chỉnh, chỉ dùng validation và công bố phạm vi thử. Mỗi run phải khởi tạo lại từ cùng pretrained encoder và decoder ban đầu theo seed; không tiếp tục train từ checkpoint đã học với loss khác.
 

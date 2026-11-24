@@ -23,14 +23,15 @@ def save_transform_preview(train_dataset, output_path, count=3):
     from .transforms import SegmentationTransform
     transform = train_dataset.transform
     evaluation = SegmentationTransform(size=transform.size, mask_threshold=transform.mask_threshold,
-                                       mean=transform.mean.flatten().tolist(), std=transform.std.flatten().tolist())
+                                       mean=transform.mean.flatten().tolist(), std=transform.std.flatten().tolist(),
+                                       image_pad_value=transform.image_pad_value)
     count = min(count, len(train_dataset))
     if count < 1:
         raise ValueError("At least one preview sample is required")
     panel_width, panel_height, row_height = 280, 235, 265
     canvas = Image.new("RGB", (4 * panel_width, 30 + count * row_height), "white")
     draw = ImageDraw.Draw(canvas)
-    for column, title in enumerate(("Original RGB", "Original GT overlay", "Resize (eval) + GT", "Augment (train) + GT")):
+    for column, title in enumerate(("Original RGB", "Original GT overlay", "Centered padding + GT", "Augment + padding + GT")):
         draw.text((column * panel_width + 6, 7), title, fill="black")
     for index in range(count):
         filename = train_dataset.ids[index] + train_dataset.extension
@@ -39,16 +40,23 @@ def save_transform_preview(train_dataset, output_path, count=3):
             original = source.convert("RGB")
         with Image.open(folder / "masks" / filename) as source:
             mask = source.convert("L")
-        eval_image, eval_mask = evaluation(original, mask)
+        eval_result = evaluation.apply(original, mask)
         sample = train_dataset[index]
         train_image, train_mask = sample["image"], sample["mask"]
-        def transformed_panel(image, mask):
+        def transformed_panel(image, mask, geometry):
             rgb = tensor_image(transform.denormalize(image))
             binary = Image.frombytes("L", (mask.shape[2], mask.shape[1]),
                                      bytes(mask.mul(255).byte().flatten().tolist()))
-            return overlay(rgb, binary)
+            panel = overlay(rgb, binary)
+            height, width = geometry["resized_size"]
+            left, top, _, _ = geometry["padding"]
+            # Green rectangle marks content; pixels outside are artificial padding.
+            ImageDraw.Draw(panel).rectangle((left, top, left + width - 1, top + height - 1),
+                                            outline=(0, 255, 0), width=1)
+            return panel
         panels = (original, overlay(original, binarize_mask(mask, transform.mask_threshold)),
-                  transformed_panel(eval_image, eval_mask), transformed_panel(train_image, train_mask))
+                  transformed_panel(eval_result["image"], eval_result["mask"], eval_result["geometry"]),
+                  transformed_panel(train_image, train_mask, sample["geometry"]))
         y = 30 + index * row_height
         draw.text((6, y + 2), filename, fill="black")
         for column, panel in enumerate(panels):

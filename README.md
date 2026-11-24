@@ -35,7 +35,7 @@ Medical-Image-Segmentation/
 │   │   ├── reporting.py              # Xuất bảng/hình và tổng kết chuẩn bị dữ liệu
 │   │   ├── preparation.py            # Điều phối bước chuẩn bị và chia tập
 │   │   ├── dataset.py                # Dataset, ghép batch và tạo DataLoader
-│   │   ├── transforms.py             # Resize, augmentation đồng bộ, normalization
+│   │   ├── transforms.py             # Giữ tỷ lệ, padding giữa ảnh, augmentation
 │   │   └── preview.py                # Minh họa ảnh–mask trước/sau transforms
 │   ├── models/
 │   │   ├── unet.py                   # [khung] U-Net tự cài, M1
@@ -172,12 +172,13 @@ Chỉ kiểm thử phần chuẩn bị dữ liệu: `python -m unittest discover
 
 - **Kvasir:** [trang công bố Simula](https://datasets.simula.no/kvasir-seg/), [ZIP gốc](https://datasets.simula.no/downloads/kvasir-seg.zip). SHA-256 ZIP khóa trong download.py: `03b30e21d584e04facf49397a2576738fd626815771afbbf788f74a7153478f7`.
 - **ClinicDB:** [nguồn công bố](https://polyp.grand-challenge.org/CVCClinicDB/); tải từ [berkaytrhn/cvc-clinicdb](https://huggingface.co/datasets/berkaytrhn/cvc-clinicdb) với revision `07f1aae53befabc313f9435c8b1b9565642a36c8`. Module ánh xạ Original/Ground Truth sang images/masks, giữ nguyên byte.
-- Không ghi đè dữ liệu gốc khi resize. Mask chuyển grayscale rồi nhị phân hóa >127. Ảnh resize bilinear, mask nearest-neighbor; augmentation hình học đồng bộ và chỉ ở train. Tensor sau xử lý nằm trong RAM để mô hình sử dụng.
+- Không ghi đè dữ liệu gốc khi resize. Mask chuyển grayscale rồi nhị phân hóa >127. Resize giữ tỷ lệ (sai số làm tròn pixel) bằng bilinear cho ảnh, nearest-neighbor cho mask; sau đó padding đủ 256×256, đặt ảnh ở giữa. Padding ảnh màu đen trước normalization, nhãn padding là 0; nếu chênh lệch lẻ, bên phải/dưới nhận thêm 1 pixel. Augmentation đồng bộ ảnh–mask, chỉ ở train và thực hiện trước resize/padding.
+- Dataset trả `valid_mask` để phân biệt vùng ảnh thật với padding, cùng `geometry` gồm kích thước gốc/sau resize/đầu vào và padding `(left, top, right, bottom)`. Khi viết loss ở bước 4, phải dùng valid_mask để loại vùng padding khỏi BCE, Dice và các loss khác; hiện chưa có vòng train hoặc loss thực thi cấu hình này.
 - Cả nhóm dùng chung ID trong splits/, seed chia 42. Những file này và quyết định rà ảnh phải có trên Git; không chỉ giữ trong máy một người. Mỗi dòng split là ID không có đuôi ảnh.
 - Hash chỉ sàng lọc, unsure không có nghĩa là duplicate đã xác nhận. Giữ chung các quan hệ confirmed/unsure và công bố giới hạn thiếu metadata bệnh nhân. Quyết định rà đã lưu được đọc lại khi chạy trên máy khác.
 - Nếu có cặp chưa rà trong Kvasir/cross-dataset, notebook 02 sẽ yêu cầu cập nhật quyết định trước khi chia. Split đã có nội dung khác sẽ làm chương trình dừng; không tự xóa danh sách để vượt kiểm tra.
 - Chọn checkpoint, loss và threshold bằng validation Kvasir; không dùng test/ClinicDB để tinh chỉnh. Loader mặc định chỉ đọc train/validation; thêm test/external khi đánh giá cuối.
-- Metric tính từng ảnh rồi trung bình theo số ảnh. Resize logits về kích thước gốc trước sigmoid/threshold 0.5, so với mask thật gốc; không trung bình các batch mà bỏ qua số ảnh khác nhau ở batch cuối.
+- Metric tính từng ảnh rồi trung bình theo số ảnh. Gọi `metrics_at_original_size(logits, original_masks, geometries, threshold=0.5)` với `batch["geometry"]`: bỏ đúng padding khỏi logits, resize phần nội dung về kích thước gốc, rồi mới sigmoid/threshold. Không resize cả vùng viền về ảnh gốc. Nếu tính metric ở kích thước đầu vào, truyền `valid_mask` cho binary_metrics. Không trung bình các batch mà bỏ qua số ảnh khác nhau ở batch cuối.
 - Trước khi commit notebook, dùng **Clear All Outputs** và lưu lại. Giữ code/Markdown trên Git, để mỗi thành viên tự tạo hình và kết quả bằng Run All.
 
 ## 6. Phần tiếp theo
