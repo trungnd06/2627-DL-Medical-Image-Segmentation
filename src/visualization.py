@@ -106,6 +106,45 @@ def plot_run_history(run_dir):
     return save_learning_curves(history, run_dir / 'learning_curves.png', mode=mode)
 
 
+def plot_ablation_curves(a1_dir, m2_dir):
+    """Overlay recorded validation curves; each line ends at its actual last epoch."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+    from matplotlib.ticker import MaxNLocator
+    from .comparison import load_run_summary
+    figure = Figure(figsize=(12, 8), layout='constrained')
+    FigureCanvasAgg(figure)
+    axes = figure.subplots(2, 2)
+    figure.suptitle('A1 vs M2 — validation and learning-rate schedules')
+    metrics = (('val_loss', 'Validation loss'), ('val_dice', 'Validation Dice'),
+               ('val_iou', 'Validation IoU'), ('learning_rate', 'Learning rate'))
+    for directory, label, color in ((a1_dir, 'A1: random', '#1768ac'), (m2_dir, 'M2: ImageNet', '#e67700')):
+        summary = load_run_summary(directory)
+        epochs = [int(row['epoch']) for row in summary['history']]
+        for axis, (key, title) in zip(axes.flat, metrics):
+            values = [float(row[key]) for row in summary['history']]
+            axis.plot(epochs, values, color=color, label=label,
+                      drawstyle='steps-post' if key == 'learning_rate' else 'default')
+            if key != 'learning_rate':
+                epoch = summary['metadata']['best_epoch']
+                axis.scatter([epoch], [float(summary['best'][key])], color=color, marker='*', s=100, zorder=4)
+            axis.set_title(title)
+            axis.set_xlabel('Epoch')
+            axis.set_ylim(bottom=0)
+            if key in ('val_dice', 'val_iou'):
+                axis.set_ylim(0, 1.02)
+            if key == 'learning_rate':
+                axis.ticklabel_format(axis='y', style='sci', scilimits=(0,0))
+            axis.xaxis.set_major_locator(MaxNLocator(integer=True))
+            axis.grid(alpha=.25)
+    for axis in axes.flat:
+        axis.legend()
+    figure.supxlabel('Stars: each model checkpoint selected by validation Dice. Curves stop at recorded epochs.', fontsize=9)
+    path = Path(a1_dir) / 'A1_M2_learning_curves.png'
+    figure.savefig(path, dpi=160)
+    return path
+
+
 @torch.no_grad()
 def save_prediction_preview(model, dataset, device, path, threshold=0.5, count=4):
     """RGB, GT và dự đoán ở kích thước gốc. Dataset phải không augmentation."""
