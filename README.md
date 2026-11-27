@@ -6,7 +6,7 @@ Nhóm dự kiến so sánh U-Net tự cài, U-Net có pretrained encoder và Seg
 
 **Tổ chức code:** module Python chứa logic; notebook gọi module, giải thích bằng Markdown và hiển thị hình. Script là cách chạy thay thế từ terminal.
 
-**Trạng thái:** đã có chuẩn bị dữ liệu, split cố định, Dataset/transforms, metric, U-Net tự cài, BCE+Dice và vòng train/validation M1. Có chế độ smoke test, học khớp vài ảnh và train đầy đủ; chưa có kết quả baseline train đầy đủ. Các mục `[khung]` bên dưới chưa có chức năng chạy.
+**Trạng thái:** đã có chuẩn bị dữ liệu, Dataset/transforms, metric, BCE+Dice và huấn luyện M1/M2/A1. M1 là U-Net tự cài; M2/A1 dùng SMP U-Net–ResNet34 với encoder ImageNet/random. Các mục `[khung]` bên dưới chưa có chức năng chạy. Kết quả huấn luyện thực tế được ghi theo run, không đồng nhất việc có code với việc đã chạy đủ các thí nghiệm.
 
 ## 1. Cấu trúc dự án
 
@@ -23,7 +23,8 @@ Medical-Image-Segmentation/
 │   ├── 01_download_data.ipynb         # Tải/xác minh nguồn và xem mẫu ảnh–mask
 │   ├── 02_prepare_data.ipynb          # Thống kê, rà ảnh gần trùng và chia tập
 │   ├── 03_data_pipeline.ipynb         # Kiểm tra batch, transforms và Dice/IoU
-│   └── 04_train_unet.ipynb            # Train M1 đầy đủ, xem biểu đồ và dự đoán
+│   ├── 04_train_unet.ipynb            # Train M1 đầy đủ, xem biểu đồ và dự đoán
+│   └── 05_train_pretrained_unet.ipynb # Train M2, tùy chọn A1 và so sánh validation
 ├── src/                              # Module dùng chung
 │   ├── __init__.py                   # Khai báo package src
 │   ├── datasets/
@@ -40,7 +41,7 @@ Medical-Image-Segmentation/
 │   │   └── preview.py                # Minh họa ảnh–mask trước/sau transforms
 │   ├── models/
 │   │   ├── unet.py                   # U-Net tự cài, logits một kênh, M1
-│   │   ├── pretrained_unet.py        # [khung] U-Net–ResNet34, M2/A1
+│   │   ├── pretrained_unet.py        # U-Net–ResNet34, M2/A1, ghi provenance weights
 │   │   ├── segformer.py              # [khung] SegFormer-B0, M3
 │   │   └── sam.py                    # [khung] SAM zero-shot, S1/S2
 │   ├── metrics.py                    # Dice/IoU/Precision/Recall theo từng ảnh
@@ -48,7 +49,8 @@ Medical-Image-Segmentation/
 │   ├── losses.py                     # BCE+soft Dice, bỏ pixel padding
 │   ├── engine.py                     # Train/validation và tổng hợp metric
 │   ├── training.py                   # Điều phối smoke/overfit/full, lưu checkpoint
-│   └── visualization.py              # Vẽ kiến trúc, learning curve và overlay
+│   ├── visualization.py              # Vẽ kiến trúc, learning curve và overlay
+│   └── comparison.py                 # So sánh validation từ các full run đã lưu
 ├── scripts/                          # Các lệnh chạy từ terminal
 │   ├── __init__.py                   # Hỗ trợ python -m scripts.<tên>
 │   ├── prepare_data.py               # Chuẩn bị/chia tập; --download để tải trước
@@ -59,7 +61,8 @@ Medical-Image-Segmentation/
 │   └── predict.py                    # [khung] Dự đoán mask từ ảnh
 ├── configs/                          # Thông số thí nghiệm
 │   ├── unet.yaml                     # Preprocessing/loader và cấu hình train M1
-│   ├── pretrained_unet.yaml          # [khung] Cấu hình M2/A1
+│   ├── pretrained_unet.yaml          # M2: ResNet34 ImageNet
+│   ├── pretrained_unet_random.yaml   # A1: cùng kiến trúc, encoder random
 │   ├── segformer.yaml                # [khung] Cấu hình M3
 │   └── sam.yaml                      # [khung] Cấu hình SAM/prompt
 ├── splits/                           # Đầu vào cố định, dùng chung cho cả nhóm
@@ -213,7 +216,9 @@ Chỉ kiểm thử phần chuẩn bị dữ liệu: `python -m unittest discover
 
 Đã có **U-Net tự cài** trong `src/models/unet.py`: encoder `32/64/128/256`, bottleneck `512`, hai Conv3×3 + ReLU mỗi khối, MaxPool và ConvTranspose2d cùng skip connection. Không BatchNorm hoặc sigmoid cuối; trả logits cùng kích thước không gian với ảnh đầu vào. Ví dụ gọi: `from src.models.unet import UNet`, rồi `model = UNet()` và `logits = model(batch["image"])` (model và batch phải cùng device). Có thể truyền `channels` và `output_channels` từ mục `model` trong `configs/unet.yaml`; `name` dùng để chọn model, không truyền vào constructor.
 
-Code bước 4 đã có. Tiếp theo cần **chạy overfit và kiểm tra hình → hoàn tất rà dữ liệu → train M1 đầy đủ → lưu kết quả baseline thực tế**. Sau đó chuyển sang pretrained U-Net M2 ở bước 5; chưa triển khai M2/A1, SegFormer, Focal/Tversky hoặc SAM.
+Notebook 05 thực hiện bước 5: M2 dùng ResNet34 ImageNet1K V1, fine-tune toàn bộ mạng; A1 tùy chọn có cùng kiến trúc và cùng khởi tạo decoder/head, chỉ encoder random. Cài bổ sung bằng `python -m pip install -r requirements-training.txt`. Lần đầu tạo M2 cần Internet để tải weights torchvision vào cache; import module không tải. Run All notebook 05 chạy M2 đầy đủ, A1 mặc định tắt. Mỗi run giữ log và lưu `results/M2/` hoặc `results/A1/`, gồm provenance/hash weights khởi tạo, checkpoint, hình và cấu hình. Kiến trúc M2/A1 lưu dạng `architecture.txt`, không dùng sơ đồ M1.
+
+Terminal: `python -m scripts.train --config configs/pretrained_unet.yaml --mode full --quiet`. Kiểm tra nhanh trước: thay `--mode full` bằng `--mode smoke --samples 8 --epochs 1`. A1 dùng `--config configs/pretrained_unet_random.yaml`. Notebook có ô riêng so sánh các full run hoàn tất mới nhất và vẽ lại từ CSV mà không train. Bảng validation được lưu tại `results/tables/M1_M2_A1_validation.md`; điểm validation không thay thế đánh giá test/external. Giữ nguyên split và các điều kiện trong cặp ablation; nếu đổi batch size do VRAM cần ghi rõ. Chưa triển khai SegFormer, Focal/Tversky hoặc SAM.
 
 Theo đề bài: tối thiểu U-Net tự cài, so sánh pretrained U-Net, Dice/IoU; mở rộng SegFormer hoặc TransUNet, so sánh Dice/Focal/Tversky và SAM zero-shot. Đối chiếu tiến độ, báo cáo ACL, phân công và các mốc nộp trong pipeline.md.
 
