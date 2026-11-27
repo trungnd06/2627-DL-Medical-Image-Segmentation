@@ -1,4 +1,4 @@
-"""Điều phối M1: smoke test, overfit vài ảnh và huấn luyện đầy đủ."""
+"""Điều phối M1/M2/A1: kiểm tra nhanh và huấn luyện trên split cố định."""
 
 import copy
 import csv
@@ -97,7 +97,7 @@ def run_training(project_root=None, config_path='configs/unet.yaml', *, mode='ov
                  epochs=None, samples=8, device=None, batch_size=None, progress=True):
     """Explicitly launch a fresh run. Overfit scores are diagnostic, never a baseline.
 
-    Each call writes to a unique results/M1/<run_id> directory; splits stay fixed.
+    Each call writes to results/<experiment_id>/<run_id>; splits stay fixed.
     Full mode reads train/val only. Checkpoints contain model + optimizer + scheduler
     + scaler + RNG states; no model/network activity happens at import time.
     """
@@ -115,8 +115,10 @@ def run_training(project_root=None, config_path='configs/unet.yaml', *, mode='ov
         raise ValueError('epochs and early stopping patience must be positive')
     if batch_size is not None:
         config['loader']['batch_size'] = batch_size
-    if config['model']['name'] != 'unet' or config['model']['output_channels'] != 1:
-        raise ValueError('Step 4 supports binary UNet M1 only')
+    model_name = config['model']['name']
+    if model_name not in ('unet', 'pretrained_unet') or config['model']['output_channels'] != 1:
+        raise ValueError('Expected binary unet or pretrained_unet')
+    experiment_id = 'M1' if model_name == 'unet' else ('M2' if config['model']['encoder_weights'] == 'imagenet' else 'A1')
     if settings['loss'] != 'bce_dice' or not settings['ignore_padding']:
         raise ValueError('M1 requires bce_dice with ignore_padding=true')
     if settings['optimizer'] != 'Adam' or settings['checkpoint_metric'] != 'val_dice':
@@ -140,7 +142,13 @@ def run_training(project_root=None, config_path='configs/unet.yaml', *, mode='ov
         loaders, indices = _small_loaders(loaders, config, mode, samples)
     if device.type == 'cuda':
         torch.cuda.reset_peak_memory_stats(device)
-    model = UNet(channels=config['model']['channels'], output_channels=1).to(device)
+    if model_name == 'unet':
+        model = UNet(channels=config['model']['channels'], output_channels=1)
+    else:
+        from .models.pretrained_unet import PretrainedUNet
+        model = PretrainedUNet(encoder_weights=config['model']['encoder_weights'],
+            decoder_channels=config['model']['decoder_channels'], init_seed=config['seed'])
+    model = model.to(device)
     criterion = BCEDiceLoss(settings['bce_weight'], settings['dice_weight'])
     optimizer = torch.optim.Adam(model.parameters(), lr=settings['learning_rate'], weight_decay=settings['weight_decay'])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -148,7 +156,7 @@ def run_training(project_root=None, config_path='configs/unet.yaml', *, mode='ov
         patience=scheduler_config['patience'], min_lr=scheduler_config['min_lr'])
     scaler = torch.amp.GradScaler(device.type, enabled=amp)
     run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + f'_{mode}_seed{config["seed"]}_{uuid.uuid4().hex[:6]}'
-    output = root / 'results/M1' / run_id
+    output = root / 'results' / experiment_id / run_id
     output.mkdir(parents=True, exist_ok=False)
     (output / 'config.yaml').write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding='utf-8')
     try:
@@ -159,11 +167,12 @@ def run_training(project_root=None, config_path='configs/unet.yaml', *, mode='ov
         commit, dirty = None, None
     review = _review_status(root)
     metadata = {'mode': mode, 'run_id': run_id, 'seed': config['seed'], 'commit': commit, 'tracked_changes': dirty,
+                'experiment_id': experiment_id, 'model_provenance': getattr(model, 'provenance', None),
                 'review_status': review, 'source_files_verified': source_files_verified,
                 'device': str(device), 'hardware': torch.cuda.get_device_name(device) if device.type == 'cuda' else platform.processor(),
                 'precision': 'cuda_fp16_amp' if amp else 'float32', 'python': platform.python_version(),
                 'torch': str(torch.__version__), 'cuda': torch.version.cuda, 'pillow': pillow_version,
-                'parameters': sum(p.numel() for p in model.parameters()), 'pretrained_weights': None,
+                'parameters': sum(p.numel() for p in model.parameters()), 'pretrained_weights': config['model'].get('encoder_weights'),
                 'determinism': 'seeded Python/torch, cuDNN deterministic; cross-platform bitwise equality not guaranteed',
                 'counts': {name: len(loader.dataset) for name, loader in loaders.items()},
                 'selected_train_indices': indices, 'validation_role': 'same_training_subset' if mode == 'overfit' else 'held_out_validation',
@@ -184,7 +193,11 @@ def run_training(project_root=None, config_path='configs/unet.yaml', *, mode='ov
     best_dice, best_epoch, stale = -1.0, 0, 0
     started = time.perf_counter()
     try:
-        save_architecture(config['model']['channels'], output / 'architecture.png')
+        if model_name == 'unet':
+            save_architecture(config['model']['channels'], output / 'architecture.png')
+        else:
+            # Exact library representation; do not reuse the M1 architecture image.
+            (output / 'architecture.txt').write_text(str(model), encoding='utf-8')
         save_prediction_preview(model, loaders['val'].dataset, device, output / 'predictions_before.png',
                                 config['evaluation']['threshold'])
         for epoch in range(1, settings['max_epochs'] + 1):
