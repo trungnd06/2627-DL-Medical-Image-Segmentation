@@ -57,7 +57,7 @@ def save_learning_curves(history, path, *, mode=None):
     figure = Figure(figsize=(12, 8), layout='constrained')
     FigureCanvasAgg(figure)
     axes = figure.subplots(2, 2)
-    title = 'M1 learning curves'
+    title = 'Segmentation learning curves'
     if mode == 'overfit':
         title += ' — overfit diagnostic (same training subset)'
     elif mode:
